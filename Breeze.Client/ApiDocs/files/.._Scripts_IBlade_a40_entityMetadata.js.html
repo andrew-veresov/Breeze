@@ -320,6 +320,7 @@ var MetadataStore = (function () {
     in the MetadataStore an exception will be thrown. 
     @method addDataService
     @param dataService {DataService} The DataService to add
+    @param [shouldOverwrite=false] {Boolean} Permit overwrite of existing DataService rather than throw exception
     **/
         
     proto.addDataService = function(dataService, shouldOverwrite) {
@@ -444,6 +445,7 @@ var MetadataStore = (function () {
         newMetadataStore.importMetadata(metadataFromStorage);
     @method importMetadata
     @param exportedMetadata {String|JSON Object} A previously exported MetadataStore.
+    @param [allowMerge] {Boolean} Allows custom metadata to be merged into existing metadata types.
     @return {MetadataStore} This MetadataStore.
     @chainable
     **/
@@ -1193,14 +1195,14 @@ var CsdlMetadataParser = (function () {
 
         var principal = constraint.principal;
         var dependent = constraint.dependent;
-        var propRefs;
+        
+        var propRefs = __toArray(dependent.propertyRef);
+        var fkNames = propRefs.map(__pluck(&quot;name&quot;));
         if (csdlProperty.fromRole === principal.role) {
-            propRefs = __toArray(principal.propertyRef);
-            cfg.invForeignKeyNamesOnServer = propRefs.map(__pluck(&quot;name&quot;));
+            cfg.invForeignKeyNamesOnServer = fkNames;
         } else {
-            propRefs = __toArray(dependent.propertyRef);
             // will be used later by np._update
-            cfg.foreignKeyNamesOnServer = propRefs.map(__pluck(&quot;name&quot;));
+            cfg.foreignKeyNamesOnServer = fkNames;
         }
 
         var np = new NavigationProperty(cfg);
@@ -2198,8 +2200,8 @@ var EntityType = (function () {
             np.invForeignKeyNames.forEach(function (invFkName) {
                 var fkProp = entityType.getDataProperty(invFkName);
                 var invEntityType = np.parentType;
-                fkProp.inverseNavigationProperty = __arrayFirst(invEntityType.navigationProperties, function (np) {
-                    return np.invForeignKeyNames &amp;&amp; np.invForeignKeyNames.indexOf(fkProp.name) &gt;= 0;
+                fkProp.inverseNavigationProperty = __arrayFirst(invEntityType.navigationProperties, function (np2) {
+                    return np2.invForeignKeyNames &amp;&amp; np2.invForeignKeyNames.indexOf(fkProp.name) &gt;= 0 &amp;&amp; np2.entityType === fkProp.parentType;
                 });
                 // entityType.foreignKeyProperties.push(fkProp);
                 addUniqueItem(entityType.foreignKeyProperties, fkProp);
@@ -2456,6 +2458,7 @@ var ComplexType = (function () {
         &quot;_updateCps&quot;,
         &quot;_initializeInstance&quot;,
         &quot;_updateTargetFromRaw&quot;,
+        &quot;_clientPropertyPathToServer&quot;,
         &quot;_setCtor&quot;
     ]);
     

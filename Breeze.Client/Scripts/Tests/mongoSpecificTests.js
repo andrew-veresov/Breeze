@@ -32,6 +32,21 @@
         return;
     };
 
+    test("query with quote", function() {
+        var em = newEm();
+        var q = EntityQuery.from("Customers").where("companyName", "contains", "'");
+        stop();
+        var recs;
+        em.executeQuery(q).then(function(data) {
+            var recs = data.results;
+            ok(recs.length >  0, "should have found some recs");
+            var recs2 = em.executeQueryLocally(q);
+            ok(recs.length === recs2.length, "local query should have returned the same recs");
+        }).fail(testFns.handleFail).fin(start);
+
+    });
+
+
     test("get/save employee hobbies", function() {
         var em = newEm();
         var q = EntityQuery.from("Employees").take(5);

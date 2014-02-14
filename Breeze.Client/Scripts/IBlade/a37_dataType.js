@@ -105,7 +105,7 @@ var DataType = (function () {
     };
 
     var fmtString = function (val) {
-        return val == null ? null : "'" + val + "'";
+        return val == null ? null : "'" + val.replace(/'/g,"''") + "'";
     };
 
     var fmtInt = function (val) {
@@ -201,7 +201,7 @@ var DataType = (function () {
     DataType.Int64 = DataType.addSymbol({
         defaultValue: 0, isNumeric: true, isInteger: true, quoteJsonOData: true,
         parse: coerceToInt,
-        fmtOData: fmtInt,
+        fmtOData: makeFloatFmt("L"),
         getNext: getNextNumber
     });
     /**

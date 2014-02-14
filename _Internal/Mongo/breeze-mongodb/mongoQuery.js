@@ -14,6 +14,9 @@ var boolOpMap = {
     ne: { mongoOp: "$ne",  jsOp: "!=" }
 }
 
+var wherePrefix = "function() { return ";
+var whereSuffix = "; }";
+
 function MongoQuery(reqQuery) {
     this.filter = {};
     this.select= {};
@@ -27,7 +30,13 @@ MongoQuery.prototype._parseUrl = function(reqQuery) {
     section = reqQuery.$filter;
     if (section) {
         var filterTree = parse(section, "filterExpr");
-        this.filter = toQueryExpr(filterTree);
+        var context = {
+            translateMember: function(memberPath) {
+                return memberPath.replace("/", ".");
+            }
+        };
+
+        this.filter = toQueryExpr(filterTree, context);
     }
 
     section = reqQuery.$select;
@@ -49,11 +58,13 @@ MongoQuery.prototype._parseUrl = function(reqQuery) {
     }
 
     section = reqQuery.$top;
-    if (section) {
+    // not ok to ignore top: 0
+    if (section !== undefined) {
         extend(this.options, { limit: parseInt(section, 10)});
     }
 
     section = reqQuery.$skip;
+    // ok to ignore skip: 0
     if (section) {
         extend(this.options, { skip: parseInt(section, 10)});
     }
@@ -73,8 +84,16 @@ MongoQuery.prototype.execute = function(db, collectionName, fn) {
         }
         var src;
 
+        // Note special handling for 'options.limit' = 0 as a real limit.
+
         if (that.inlineCount) {
             collection.count(that.filter, function(err, count) {
+                // Mongo doesn't handle limit = 0 as a real limit.
+                if (that.options && that.options.limit === 0) {
+                    var resultsWith =  { Results: [], InlineCount: count };
+                    fn(null, resultsWith);
+                    return;
+                }
                 src = collection.find(that.filter, that.select, that.options);
                 src.toArray(function (err, results) {
                     results = processResults(results, that.resultEntityType);
@@ -83,6 +102,11 @@ MongoQuery.prototype.execute = function(db, collectionName, fn) {
                 });
             });
         } else {
+            // Mongo doesn't handle limit = 0 as a real limit.
+            if (that.options && that.options.limit === 0) {
+                fn(err, []);
+                return;
+            }
             src = collection.find(that.filter, that.select, that.options);
             src.toArray(function (err, results) {
                 results = processResults(results, that.resultEntityType);
@@ -91,6 +115,7 @@ MongoQuery.prototype.execute = function(db, collectionName, fn) {
         }
     });
 };
+
 
 function processResults(results, resultEntityType) {
     results == results || [];
@@ -131,53 +156,49 @@ function toSelectExpr(selectItems) {
     return result;
 }
 
-function toQueryExpr(node) {
+function toQueryExpr(node, context) {
     if (node.type === "op_bool") {
-        return makeBoolFilter(node.op, node.p1, node.p2);
+        return makeBoolFilter(node, context);
     } else if (node.type === "op_andOr") {
-        return makeAndOrFilter(node.op, node.p1, node.p2);
+        return makeAndOrFilter(node, context);
     } else if (node.type === "fn_2") {
-        return makeFn2Filter(node.name, node.p1, node.p2);
+        return makeFn2Filter(node, context);
     } else if (node.type === "op_unary") {
-        return makeUnaryFilter(node.op, node.p1);
+        return makeUnaryFilter(node, context);
+    } else if (node.type === "op_anyAll") {
+        return makeAnyAllFilter(node, context);
     } else {
         throw new Error("Unable to parse node: " + node.type)
     }
 }
 
-function makeBoolFilter(op, p1, p2) {
+function makeBoolFilter(node, context) {
     var q = {};
+    var op = node.op;
+    var p1 = node.p1;
+    var p2 = node.p2;
+    var p1Value = parseNodeValue(p1, context);
+    var p2Value = parseNodeValue(p2, context);
 
     if (p1.type === "member") {
-        // handles nested paths. '/' -> "."
-        var p1Value = p1.value.replace("/",".");
-
-        var p2Value;
         if (startsWith(p2.type, "lit_")) {
-            if (p2.type === "lit_string") {
-                p2Value = parseLitString(p2.value);
-            } else {
-                p2Value = p2.value;
-            }
             if (op === "eq") {
                 q[p1Value] = p2Value;
-                return q;
             } else {
                 var mop = boolOpMap[op].mongoOp;
                 var crit = {};
                 crit[mop] = p2Value;
                 q[p1Value] = crit;
-                return q;
             }
+            return q;
         } else if (p2.type === "member") {
             var jop = boolOpMap[op].jsOp;
-            var p2Value = p2.value.replace("/",".");
-            q["$where"] = "function() { return this." + p1Value + " " + jop + " this." + p2Value + "}";
-            return q;
+            var fn =  "this." + p1Value + " " + jop + " this." + p2Value ;
+            return addWhereClause(q, fn);
         }
     } else if (p2.type === "lit_boolean") {
-        var q = toQueryExpr(p1);
-        if (p2.value === true) {
+        var q = toQueryExpr(p1, context);
+        if (p2Value === true) {
             return q;
         } else {
             return applyNot(q);
@@ -186,9 +207,10 @@ function makeBoolFilter(op, p1, p2) {
     throw new Error("Not yet implemented: Boolean operation: " + op + " p1: " + stringify(p1) + " p2: " + stringify(p2));
 }
 
-function makeUnaryFilter(op, p1) {
-
-    var q1 = toQueryExpr(p1);
+function makeUnaryFilter(node, context) {
+    var op = node.op;
+    var p1 = node.p1;
+    var q1 = toQueryExpr(p1, context);
 
     if (op === "not ") {
         return applyNot(q1);
@@ -196,56 +218,38 @@ function makeUnaryFilter(op, p1) {
     throw new Error("Not yet implemented: Unary operation: " + op + " p1: " + stringify(p1));
 }
 
-function applyNot(q1) {
-    // because of the #@$#1 way mongo defines $not - i.e. can't apply it at the top level of an expr
-    // and / or code gets ugly.
-    // rules are:
-    // not { a: 1}             -> { a: { $ne: 1 }}
-    // not { a: { $gt: 1 }}    -> { a: { $not: { $gt: 1}}}
-    // not { a: 1, b: 2 }      -> { $or: { a: { $ne: 1 }, b: { $ne 2 }}}
-    // not { $or { a:1, b: 2 } -> { a: { $ne: 1 }, b: { $ne 2 }  // THIS ONE NOT YET COMPLETE
-    var results = [];
-    for (var k in q1) {
-        if (k === "$or") {
-            break; // haven't handled this case yet so just get out
-        }
-        var result = {};
-        var v = q1[k];
-        if ( v!=null && typeof(v) === "object") {
-            result[k] = { $not: v };
-        } else {
-            result[k] = { "$ne": v };
-        }
-        results.push(result);
-    }
-    if (results.length === 1) {
-        return results[0];
-    } else {
-        return { "$or": results };
-    }
-}
 
-function makeFn2Filter(fnName, p1, p2) {
+function makeFn2Filter(node, context) {
+    var fnName = node.name;
+    var p1 = node.p1;
+    var p2 = node.p2;
     var q = {};
+
+    var p1Value = parseNodeValue(p1, context);
+    var p2Value = parseNodeValue(p2, context);
+
     if (p1.type === "member") {
         // TODO: need to handle nested paths. '/' -> "."
-        var key = p1.value;
+
         if (startsWith(p2.type, "lit_")) {
             if (fnName === "startswith") {
-                q[key] =  new RegExp("^" +p2.value, 'i' ) ;
+                q[p1Value] =  new RegExp("^" +p2Value, 'i' ) ;
             }   else if (fnName === "endswith") {
-                q[key] =  new RegExp( p2.value + "$", 'i');
+                q[p1Value] =  new RegExp( p2Value + "$", 'i');
             }
         } else if (p2.type === "member") {
+            var fn;
             if (fnName === "startswith") {
-                q["$where"] =  "function() { return (new RegExp('^' + this." + p2.value + ",'i')).test(this." +  p1.value + "); }";
+                fn =  "(new RegExp('^' + this." + p2Value + ",'i')).test(this." +  p1Value + ")";
+                addWhereClause(q, fn);
             }   else if (fnName === "endswith") {
-                q["$where"] =  "function() { return (new RegExp(this." + p2.value + " + '$','i')).test(this." +  p1.value + "); }";
+                fn =  "(new RegExp(this." + p2Value + " + '$','i')).test(this." +  p1Value + ")";
+                addWhereClause(q, fn);
             }
         }
     } else if (fnName === "substringof") {
         if (p1.type === "lit_string" && p2.type === "member") {
-            q[p2.value] = new RegExp(p1.value, "i");
+            q[p2Value] = new RegExp(p1Value, "i");
         }
     }
 
@@ -255,20 +259,101 @@ function makeFn2Filter(fnName, p1, p2) {
     throw new Error("Not yet implemented: Function: " + fnName + " p1: " + stringify(p1) + " p2: " + stringify(p2));
 }
 
-function makeAndOrFilter(op, p1, p2) {
+function makeAndOrFilter(node, context) {
 
-    var q1 = toQueryExpr(p1);
-    var q2 = toQueryExpr(p2);
+    var q1 = toQueryExpr(node.p1, context);
+    var q2 = toQueryExpr(node.p2, context);
     var q;
-    if (op === "and") {
-        q = extend(q1, q2);
+    if (node.op === "and") {
+        // q = extendQuery(q1, q2);
+        q = { "$and": [q1, q2] };
     } else {
-        q = { "$or": [q1, q2] }
+        q = { "$or": [q1, q2] };
     }
     return q;
 }
 
+function makeAnyAllFilter(node, context) {
+    var lambda = node.lambda;
+    var newContext = {
+        translateMember: function(memberPath) {
+            return context.translateMember(memberPath.replace(lambda + "/", ""));
+        }
+    }
+    return (node.op === "any") ? makeAnyFilter(node, newContext) : makeAllFilter(node, newContext);
+}
 
+function makeAnyFilter(node, context) {
+    var subq = toQueryExpr(node.subquery, context);
+    var q = {};
+    var key = context.translateMember(node.member);
+    q[key] = { "$elemMatch" : subq } ;
+    return q;
+}
+
+function makeAllFilter(node, context) {
+    var subq = toQueryExpr(node.subquery, context);
+    var notSubq = applyNot(subq);
+    var q = {};
+    var key = context.translateMember(node.member);
+    q[key] = { $not: { "$elemMatch" : notSubq } } ;
+    q[key + ".0"] = { $exists: true };
+    return q;
+}
+
+function parseNodeValue(node, context) {
+    if (!node) return null;
+    if (node.type === "member") {
+        return context.translateMember(node.value);
+    } else if (node.type === "lit_string" ) {
+        return parseLitString(node.value);
+    } else {
+        return node.value;
+    }
+}
+
+function applyNot(q1) {
+    // because of the #@$#1 way mongo defines $not - i.e. can't apply it at the top level of an expr
+    // and / or code gets ugly.
+    // rules are:
+    // not { a: 1}             -> { a: { $ne: 1 }}
+    // not { a: { $gt: 1 }}    -> { a: { $not: { $gt: 1}}}
+    // not { $and { a: 1, b: 2 } -> { $or:  { a: { $ne: 1 }, b: { $ne 2 }}}
+    // not { $or  { a: 1, b: 2 } -> { $and: [ a: { $ne: 1 }, b: { $ne 2 }]}
+
+    var results = [];
+    for (var k in q1) {
+        var v = q1[k];
+        if (k === "$or") {
+           result = { $and: [ applyNot(v[0]), applyNot(v[1]) ] }
+        } else if (k === "$and") {
+           result = {  $or: [ applyNot(v[0]), applyNot(v[1]) ] }
+        } else {
+            result = {};
+            if ( v!=null && typeof(v) === "object") {
+                result[k] = { $not: v };
+            } else {
+                result[k] = { "$ne": v };
+            }
+        }
+
+        results.push(result);
+    }
+    if (results.length === 1) {
+        return results[0];
+    } else {
+        // Don't think we should ever get here with the current logic because all
+        // queries should only have a single node
+        return { "$or": results };
+    }
+}
+
+function addWhereClause(q, whereClause) {
+    whereClause = "(" + whereClause + ")";
+    var whereFn = wherePrefix + whereClause + whereSuffix;
+    q.$where = whereFn;
+    return q;
+}
 
 function startsWith(str, prefix) {
     // returns false for empty strings too
@@ -308,8 +393,50 @@ function extend(target, source) {
     if (!source) return target;
     for (var name in source) {
         if (source.hasOwnProperty(name)) {
-            target[name] = source[name];
+            var targetVal = target[name];
+            if (targetVal && typeof targetVal === 'object') {
+                extend(targetVal, source[name]);
+            } else {
+                target[name] = source[name];
+            }
         }
     }
     return target;
 }
+
+// No longer needed.
+//function extendQuery(target, source) {
+//    if (!source) return target;
+//    for (var name in source) {
+//        if (source.hasOwnProperty(name)) {
+//            var targetClause = target[name];
+//            if (targetClause) {
+//                if (name === "$where") {
+//                    target[name] = mergeWhereClauses(targetClause, source[name]);
+//                } else if (typeof(targetClause) === 'object') {
+//                    extendQuery(targetClause, source[name]);
+//                } else {
+//                    var crit = {};
+//                    var crit = { }
+//                }
+//            } else {
+//                target[name] = source[name];
+//            }
+//        }
+//    }
+//    return target;
+//}
+//
+//
+//function mergeWhereClauses(targetFn, sourceFn) {
+//    var targetClause = whereFnToWhereClause(targetFn);
+//    var sourceClause = whereFnToWhereClause(sourceFn);
+//    var whereFn = wherePrefix + targetClause + " && " + sourceClause + whereSuffix;
+//    return whereFn;
+//}
+//
+//function whereFnToWhereClause(whereFn) {
+//    return whereFn.substring(wherePrefix.length, whereFn.length-whereSuffix.length);
+//}
+//
+//

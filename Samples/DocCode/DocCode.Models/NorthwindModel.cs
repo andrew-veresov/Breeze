@@ -159,8 +159,10 @@ namespace Northwind.Models
     [ForeignKey("ReportsToEmployeeID")]
     [InverseProperty("DirectReports")]
     public Employee Manager {get; set;}
-    
-    [InverseProperty("Employee")]
+
+    // See NorthwindContext.EmployeeConfiguration
+    // Cannot configure using attributes because CF gets confused if you use 
+    // [ForeignKey("EmployeeID")
     public ICollection<EmployeeTerritory> EmployeeTerritories {get;set;}
     
     [InverseProperty("Employee")]
@@ -181,14 +183,19 @@ namespace Northwind.Models
  
   public class EmployeeTerritory {
     
-    public int ID {get;set;}   
-    public int EmployeeID {get;set;}    
+    public int ID {get;set;}
+
+    [Column("EmployeeID")]
+    // Renamed EmployeeID FK property should demonstrate that 
+    // FK property doesn't have to match the table column name 
+    public int EmpID { get; set; } 
+    
     public int TerritoryID {get;set;}    
     public int RowVersion {get;set;}
     
-    [ForeignKey("EmployeeID")]
-    [InverseProperty("EmployeeTerritories")]
-    public Employee Employee {get;set;}
+    // REMOVE THE NAVIGATION BACK TO PARENT EMPLOYEE
+    //[InverseProperty("EmployeeTerritories")]
+    //public Employee Employee {get;set;}
    
     [ForeignKey("TerritoryID")]
     [InverseProperty("EmployeeTerritories")]

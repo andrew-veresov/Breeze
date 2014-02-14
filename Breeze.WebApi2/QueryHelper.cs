@@ -37,7 +37,8 @@ namespace Breeze.WebApi2 {
       return settings;
     }
 
-  
+    // Controls whether we always handle expands (vs. letting WebApi take care of it)
+    public virtual bool ManuallyExpand { get { return false; } }
 
     /// <summary>
     /// Provide a hook to do any processing before applying the query.  This implementation does nothing.
@@ -51,7 +52,7 @@ namespace Breeze.WebApi2 {
 
 
     public IQueryable ApplyQuery(IQueryable queryable, ODataQueryOptions queryOptions) {
-      return QueryHelper.ApplyQuery(queryable, queryOptions, this.querySettings);
+      return ApplyQuery(queryable, queryOptions, this.querySettings);
     }
 
     /// <summary>
@@ -62,7 +63,7 @@ namespace Breeze.WebApi2 {
     /// <param name="queryOptions"></param>
     /// <param name="querySettings"></param>
     /// <returns></returns>
-    public static IQueryable ApplyQuery(IQueryable queryable, ODataQueryOptions queryOptions, ODataQuerySettings querySettings) {
+    public IQueryable ApplyQuery(IQueryable queryable, ODataQueryOptions queryOptions, ODataQuerySettings querySettings) {
 
       // HACK: this is a hack because on a bug in querySettings.EnsureStableOrdering = true that overrides
       // any existing order by clauses, instead of appending to them.
@@ -91,6 +92,8 @@ namespace Breeze.WebApi2 {
         newQueryOptions = QueryHelper.RemoveSelectExpandOrderBy(newQueryOptions);
       } else if ((!string.IsNullOrWhiteSpace(orderByQueryString)) && orderByQueryString.IndexOf('/') >= 0) {
         newQueryOptions = QueryHelper.RemoveSelectExpandOrderBy(newQueryOptions);
+      } else if (ManuallyExpand && !string.IsNullOrWhiteSpace(expandQueryString))  {
+        newQueryOptions = QueryHelper.RemoveSelectExpandOrderBy(newQueryOptions);
       }
 
 
@@ -100,8 +103,7 @@ namespace Breeze.WebApi2 {
         // apply default processing first with "unsupported" stuff removed. 
         var q = newQueryOptions.ApplyTo(queryable, querySettings);
         // then apply unsupported stuff. 
-        var qh = new QueryHelper(querySettings);
-
+        
         string inlinecountString = queryOptions.RawValues.InlineCount;
         if (!string.IsNullOrWhiteSpace(inlinecountString)) {
           if (inlinecountString == "allpages") {
@@ -110,10 +112,10 @@ namespace Breeze.WebApi2 {
           }
         }
         
-        q = qh.ApplyOrderBy(q, queryOptions);
-        var q2 = qh.ApplySelect(q, queryOptions);
+        q = ApplyOrderBy(q, queryOptions);
+        var q2 = ApplySelect(q, queryOptions);
         if (q2 == q) {
-          q2 = qh.ApplyExpand(q, queryOptions);
+          q2 = ApplyExpand(q, queryOptions);
         }
                 
         return q2;
@@ -302,6 +304,12 @@ namespace Breeze.WebApi2 {
     public virtual void ConfigureFormatter(JsonMediaTypeFormatter jsonFormatter, IQueryable queryable) {
     }
 
+    /// <summary>
+    /// Release any resources associated with this QueryHelper.
+    /// </summary>
+    /// <param name="responseObject">Response payload, which may have associated resources.</param>
+    public virtual void Close(object responseObject)    {
+    }
 
   }
 

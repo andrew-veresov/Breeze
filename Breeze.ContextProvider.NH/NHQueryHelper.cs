@@ -1,5 +1,4 @@
 ﻿using Breeze.WebApi2;
-using Newtonsoft.Json;
 using NHibernate;
 using NHibernate.Linq;
 using System;
@@ -13,7 +12,7 @@ namespace Breeze.ContextProvider.NH
 {
     public class NHQueryHelper : QueryHelper
     {
-        protected ExpandTypeMap expandMap = new ExpandTypeMap();
+        protected string[] expandPaths;
         protected ISession session;
 
         public NHQueryHelper(bool enableConstantParameterization, bool ensureStableOrdering, HandleNullPropagationOption handleNullPropagation, int pageSize)
@@ -29,47 +28,76 @@ namespace Breeze.ContextProvider.NH
         {
         }
 
+        // Controls whether we always handle expands (vs. letting WebApi take care of it)
+        public override bool ManuallyExpand { get { return true; } }
+
+        /// <summary>
+        /// Before applying the queryOptions to the queryable, perform special processing to handle
+        /// $expand and work around the NHibernate IQueryable limitations
+        /// </summary>
+        /// <param name="queryable"></param>
+        /// <param name="queryOptions"></param>
+        /// <returns></returns>
         public override IQueryable BeforeApplyQuery(IQueryable queryable, ODataQueryOptions queryOptions)
         {
             var nhQueryable = queryable as IQueryableInclude;
             if (nhQueryable != null)
             {
-                queryable = ApplyExpand(nhQueryable);
+                queryable = NHApplyExpand(nhQueryable);
+            }
+            queryable = NHApplyExpand(queryable, queryOptions);
+
+            return queryable;
+        }
+
+        /// <summary>
+        /// Saves the expand path strings from queryable.GetIncludes(),
+        /// for later lazy initialization and serialization.
+        /// </summary>
+        /// <param name="queryable"></param>
+        /// <returns></returns>
+        protected IQueryable NHApplyExpand(IQueryableInclude queryable)
+        {
+            var expands = queryable.GetIncludes();
+            if (expands != null && expands.Count > 0)
+            {
+                this.expandPaths = expands.ToArray();
             }
             return queryable;
         }
 
         /// <summary>
-        /// Performs expands based on the list of strings in queryable.GetIncludes().
-        /// Also populates the ExpandTypeMap that controls lazy initialization and serialization.
-        /// </summary>
-        /// <param name="queryable"></param>
-        /// <returns></returns>
-        public IQueryable ApplyExpand(IQueryableInclude queryable)
-        {
-            var expands = queryable.GetIncludes();
-            if (expands == null || expands.Count == 0) return queryable;
-            var session = GetSession(queryable);
-            var fetcher = new NHEagerFetch(session.SessionFactory);
-            var expandedQueryable = fetcher.ApplyExpansions(queryable, expands.ToArray(), expandMap);
-
-            return expandedQueryable;
-        }
-
-        /// <summary>
-        /// Overrides the method in QueryHelper to perform the $expands in NHibernate.
-        /// Also populates the ExpandTypeMap that controls lazy initialization and serialization.
+        /// Saves the expand path string from the queryOptions, 
+        /// for later lazy initialization and serialization.
         /// </summary>
         /// <param name="queryable"></param>
         /// <param name="expandsQueryString"></param>
         /// <returns></returns>
-        public override IQueryable ApplyExpand(IQueryable queryable, ODataQueryOptions queryOptions) {
+        protected IQueryable NHApplyExpand(IQueryable queryable, ODataQueryOptions queryOptions) {
             var expandQueryString = queryOptions.RawValues.Expand;
             if (string.IsNullOrWhiteSpace(expandQueryString)) return queryable;
-            var session = GetSession(queryable);
-            var fetcher = new NHEagerFetch(session.SessionFactory);
-            queryable = fetcher.ApplyExpansions(queryable, expandQueryString, expandMap);
+            string[] expandPaths = expandQueryString.Split(',').Select(s => s.Trim()).ToArray();
+            if (this.expandPaths != null)
+            {
+                this.expandPaths = this.expandPaths.Concat(expandPaths).ToArray();
+            }
+            else
+            {
+                this.expandPaths = expandPaths;
+            }
 
+            return queryable;
+        }
+
+        /// <summary>
+        /// Override ApplyExpand to do nothing.  NHApplyExpand takes care of expands for NH, and 
+        /// it is executed earlier in the query processing (in BeforeApplyQuery)
+        /// </summary>
+        /// <param name="queryable"></param>
+        /// <param name="queryOptions"></param>
+        /// <returns></returns>
+        public override IQueryable ApplyExpand(IQueryable queryable, ODataQueryOptions queryOptions)
+        {
             return queryable;
         }
 
@@ -93,12 +121,15 @@ namespace Breeze.ContextProvider.NH
         }
 
         /// <summary>
-        /// Perform the lazy loading allowed in the expandMap.
+        /// Perform the lazy loading allowed in the expandPaths.
         /// </summary>
         /// <param name="list"></param>
         public override IEnumerable PostExecuteQuery(IEnumerable list)
         {
-            NHInitializer.InitializeList(list, expandMap);
+            if (expandPaths != null)
+            {
+                NHExpander.InitializeList(list, expandPaths);
+            }
             return list;
         }
 
@@ -122,18 +153,14 @@ namespace Breeze.ContextProvider.NH
         private void ConfigureFormatter(JsonMediaTypeFormatter jsonFormatter, ISession session)
         {
             var settings = jsonFormatter.SerializerSettings;
-            settings.Formatting = Formatting.Indented;  // TODO debug only - makes the payload larger
 
             if (session != null)
             {
                 // Only serialize the properties that were initialized before session was closed
                 if (session.IsOpen) session.Close();
             }
-            else if (expandMap.map.Count > 0)
-            {
-                // Limit serialization by only allowing properties in the map
-                settings.ContractResolver = new IncludingContractResolver(expandMap.map);
-            }
+
+            settings.ContractResolver = NHibernateContractResolver.Instance;
 
             settings.Error = delegate(object sender, Newtonsoft.Json.Serialization.ErrorEventArgs args)
             {
@@ -144,6 +171,19 @@ namespace Breeze.ContextProvider.NH
                     args.ErrorContext.Handled = true;
             };
             settings.Converters.Add(new NHibernateProxyJsonConverter());
+        }
+
+        /// <summary>
+        /// Release any resources associated with this QueryHelper.
+        /// </summary>
+        /// <param name="responseObject">Response payload, which may have associated resources.</param>
+        public override void Close(object responseObject)
+        {
+            session = GetSession(responseObject as IQueryable);
+            if (session != null)
+            {
+                if (session.IsOpen) session.Close();
+            }
         }
 
     }

@@ -1,6 +1,7 @@
 ﻿using Breeze.WebApi;
 using NHibernate;
 using NHibernate.Metadata;
+using NHibernate.Persister.Entity;
 using NHibernate.Type;
 using System;
 using System.Collections.Generic;
@@ -17,11 +18,15 @@ namespace Breeze.WebApi.NH
     /// be populated in order for the foreign key value to be saved in the DB.  To work
     /// around this problem, this class uses the IDs sent by Breeze to re-connect the related entities.
     /// </summary>
-    class NHRelationshipFixer
+    public class NHRelationshipFixer
     {
         private Dictionary<Type, List<EntityInfo>> saveMap;
         private IDictionary<string, string> fkMap;
         private ISession session;
+        private List<EntityInfo> saveOrder;
+        private List<EntityInfo> deleteOrder;
+        private Dictionary<EntityInfo, List<EntityInfo>> dependencyGraph;
+        private bool removeMode;
 
         /// <summary>
         /// Create new instance with the given saveMap and fkMap.  Since the saveMap is unique per save, 
@@ -35,14 +40,102 @@ namespace Breeze.WebApi.NH
             this.saveMap = saveMap;
             this.fkMap = fkMap;
             this.session = session;
+            this.dependencyGraph = new Dictionary<EntityInfo, List<EntityInfo>>();
         }
 
         /// <summary>
-        /// Connect the related entities in the saveMap to other entities.
+        /// Connect the related entities in the saveMap to other entities.  If the related entities
+        /// are not in the saveMap, they are loaded from the session.
         /// </summary>
-        /// <param name="canUseSession">Whether we can load the related entity via the Session.  
-        /// If false, we only connect entities that are also in the saveMap</param>
-        public void FixupRelationships(bool canUseSession)
+        /// <returns>The list of entities in the order they should be save, according to their relationships.</returns>
+        public List<EntityInfo> FixupRelationships()
+        {
+            this.removeMode = false;
+            ProcessRelationships();
+            return SortDependencies();
+        }
+
+        /// <summary>
+        /// Remove the navigations between entities in the saveMap.  This flattens the JSON
+        /// result so Breeze can handle it.
+        /// </summary>
+        /// <param name="saveMap">Map of entity types -> entity instances to save</param>
+        public void RemoveRelationships()
+        {
+            this.removeMode = true;
+            ProcessRelationships();
+        }
+
+        /// <summary>
+        /// Add the relationship to the dependencyGraph
+        /// </summary>
+        /// <param name="child">Entity that depends on parent (e.g. has a many-to-one relationship to parent)</param>
+        /// <param name="parent">Entity that child depends on (e.g. one parent has one-to-many children)</param>
+        /// <param name="removeReverse">True to find and remove the reverse relationship.  Used for handling one-to-ones.</param>
+        private void AddToGraph(EntityInfo child, EntityInfo parent, bool removeReverse)
+        {
+            List<EntityInfo> list;
+            if (!dependencyGraph.TryGetValue(child, out list))
+            {
+                list = new List<EntityInfo>(5);
+                dependencyGraph.Add(child, list);
+            }
+            if (parent != null) list.Add(parent);
+
+            if (removeReverse)
+            {
+                List<EntityInfo> parentList;
+                if (dependencyGraph.TryGetValue(parent, out parentList))
+                {
+                    parentList.Remove(child);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Sort the entries in the dependency graph according to their dependencies.
+        /// </summary>
+        /// <returns></returns>
+        private List<EntityInfo> SortDependencies()
+        {
+            saveOrder = new List<EntityInfo>();
+            deleteOrder = new List<EntityInfo>();
+            foreach (var entityInfo in dependencyGraph.Keys)
+            {
+                AddToSaveOrder(entityInfo, 0);
+            }
+            deleteOrder.Reverse();
+            saveOrder.AddRange(deleteOrder);
+            return saveOrder;
+        }
+
+        /// <summary>
+        /// Recursively add entities to the saveOrder or deleteOrder according to their dependencies
+        /// </summary>
+        /// <param name="entityInfo">Entity to be added.  Its dependencies will be added depth-first.</param>
+        /// <param name="depth">prevents infinite recursion in case of cyclic dependencies</param>
+        private void AddToSaveOrder(EntityInfo entityInfo, int depth)
+        {
+            if (saveOrder.Contains(entityInfo)) return;
+            if (deleteOrder.Contains(entityInfo)) return;
+            if (depth > 10) return;
+
+            var dependencies = dependencyGraph[entityInfo];
+            foreach (var dep in dependencies)
+            {
+                AddToSaveOrder(dep, depth + 1);
+            }
+
+            if (entityInfo.EntityState == EntityState.Deleted)
+                deleteOrder.Add(entityInfo);
+            else
+                saveOrder.Add(entityInfo);
+        }
+
+        /// <summary>
+        /// Add or remove the entity relationships according to the removeMode.
+        /// </summary>
+        private void ProcessRelationships()
         {
             foreach (var kvp in saveMap)
             {
@@ -51,7 +144,8 @@ namespace Breeze.WebApi.NH
 
                 foreach (var entityInfo in kvp.Value)
                 {
-                    FixupRelationships(entityInfo, classMeta, canUseSession);
+                    AddToGraph(entityInfo, null, false); // make sure every entity is in the graph
+                    FixupRelationships(entityInfo, classMeta);
                 }
             }
         }
@@ -62,23 +156,22 @@ namespace Breeze.WebApi.NH
         /// </summary>
         /// <param name="entityInfo">Entity that will be saved</param>
         /// <param name="meta">Metadata about the entity type</param>
-        /// <param name="canUseSession">Whether we can load the related entity via the Session.  
-        /// If false, we only connect entities that are also in the saveMap</param>
-        private void FixupRelationships(EntityInfo entityInfo, IClassMetadata meta, bool canUseSession)
+        private void FixupRelationships(EntityInfo entityInfo, IClassMetadata meta)
         {
             var propNames = meta.PropertyNames;
             var propTypes = meta.PropertyTypes;
+
 
             if (meta.IdentifierType != null)
             {
                 var propType = meta.IdentifierType;
                 if (propType.IsAssociationType && propType.IsEntityType)
                 {
-                    FixupRelationship(meta.IdentifierPropertyName, meta.IdentifierType, entityInfo, meta, canUseSession);
+                    FixupRelationship(meta.IdentifierPropertyName, (EntityType)propType, entityInfo, meta);
                 }
                 else if (propType.IsComponentType)
                 {
-                    FixupComponentRelationships(meta.IdentifierPropertyName, (ComponentType)propType, entityInfo, meta, canUseSession);
+                    FixupComponentRelationships(meta.IdentifierPropertyName, (ComponentType)propType, entityInfo, meta);
                 }
             }
 
@@ -87,11 +180,11 @@ namespace Breeze.WebApi.NH
                 var propType = propTypes[i];
                 if (propType.IsAssociationType && propType.IsEntityType)
                 {
-                    FixupRelationship(propNames[i], propTypes[i], entityInfo, meta, canUseSession);
+                    FixupRelationship(propNames[i], (EntityType)propTypes[i], entityInfo, meta);
                 }
                 else if (propType.IsComponentType)
                 {
-                    FixupComponentRelationships(propNames[i], (ComponentType)propType, entityInfo, meta, canUseSession);
+                    FixupComponentRelationships(propNames[i], (ComponentType)propType, entityInfo, meta);
                 }
             }
         }
@@ -104,9 +197,7 @@ namespace Breeze.WebApi.NH
         /// <param name="compType">Type of the component</param>
         /// <param name="entityInfo">Breeze EntityInfo</param>
         /// <param name="meta">Metadata for the entity class</param>
-        /// <param name="canUseSession">Whether we can load the related entity via the Session.  
-        /// If false, we only connect entities that are also in the saveMap</param>
-        private void FixupComponentRelationships(string propName, ComponentType compType, EntityInfo entityInfo, IClassMetadata meta, bool canUseSession)
+        private void FixupComponentRelationships(string propName, ComponentType compType, EntityInfo entityInfo, IClassMetadata meta)
         {
             var compPropNames = compType.PropertyNames;
             var compPropTypes = compType.Subtypes;
@@ -127,12 +218,18 @@ namespace Breeze.WebApi.NH
                     if (compValues[j] == null)
                     {
                         // the related entity is null
-                        var relatedEntity = GetRelatedEntity(compPropNames[j], compPropType, entityInfo, meta, canUseSession);
+                        var relatedEntity = GetRelatedEntity(compPropNames[j], (EntityType)compPropType, entityInfo, meta);
                         if (relatedEntity != null)
                         {
                             compValues[j] = relatedEntity;
                             isChanged = true;
                         }
+                    }
+                    else if (removeMode)
+                    {
+                        // remove the relationship
+                        compValues[j] = null;
+                        isChanged = true;
                     }
                 }
             }
@@ -150,62 +247,98 @@ namespace Breeze.WebApi.NH
         /// <param name="propType">Type of the property</param>
         /// <param name="entityInfo">Breeze EntityInfo</param>
         /// <param name="meta">Metadata for the entity class</param>
-        /// <param name="canUseSession">Whether we can load the related entity via the Session.  
-        /// If false, we only connect entities that are also in the saveMap</param>
-        private void FixupRelationship(string propName, IType propType, EntityInfo entityInfo, IClassMetadata meta, bool canUseSession)
+        private void FixupRelationship(string propName, EntityType propType, EntityInfo entityInfo, IClassMetadata meta)
         {
             var entity = entityInfo.Entity;
+            if (removeMode)
+            {
+                meta.SetPropertyValue(entity, propName, null, EntityMode.Poco);
+                return;
+            }
             object relatedEntity = GetPropertyValue(meta, entity, propName);
             if (relatedEntity != null) return;    // entities are already connected
 
-            relatedEntity = GetRelatedEntity(propName, propType, entityInfo, meta, canUseSession);
+            relatedEntity = GetRelatedEntity(propName, propType, entityInfo, meta);
 
             if (relatedEntity != null)
                 meta.SetPropertyValue(entity, propName, relatedEntity, EntityMode.Poco);
         }
 
         /// <summary>
-        /// Get a related entity based on the value of the foreign key.
+        /// Get a related entity based on the value of the foreign key.  Attempts to find the related entity in the
+        /// saveMap; if its not found there, it is loaded via the Session (which should create a proxy, not actually load 
+        /// the entity from the database).
+        /// Related entities are Promoted in the saveOrder according to their state.
         /// </summary>
         /// <param name="propName">Name of the navigation/association property of the entity, e.g. "Customer".  May be null if the property is the entity's identifier.</param>
         /// <param name="propType">Type of the property</param>
         /// <param name="entityInfo">Breeze EntityInfo</param>
         /// <param name="meta">Metadata for the entity class</param>
-        /// <param name="canUseSession">Whether we can load the related entity via the Session.  
-        /// If false, we only connect entities that are also in the saveMap</param>
         /// <returns></returns>
-        private object GetRelatedEntity(string propName, IType propType, EntityInfo entityInfo, IClassMetadata meta, bool canUseSession)
+        private object GetRelatedEntity(string propName, EntityType propType, EntityInfo entityInfo, IClassMetadata meta)
         {
             object relatedEntity = null;
-            var relKey = meta.EntityName + '.' + propName;
-            var foreignKeyName = fkMap[relKey];
-
-            object id = GetForeignKeyValue(entityInfo, meta, foreignKeyName, canUseSession);
+            string foreignKeyName = FindForeignKey(propName, meta);
+            object id = GetForeignKeyValue(entityInfo, meta, foreignKeyName);
 
             if (id != null)
             {
-                relatedEntity = FindInSaveMap(propType.ReturnedClass, id);
+                EntityInfo relatedEntityInfo = FindInSaveMap(propType.ReturnedClass, id);
 
-                if (relatedEntity == null && canUseSession)
+                if (relatedEntityInfo == null)
                 {
-                    var relatedEntityName = propType.Name;
-                    relatedEntity = session.Load(relatedEntityName, id);
+                    var state = entityInfo.EntityState;
+                    if (state != EntityState.Deleted || !propType.IsNullable)
+                    {
+                        var relatedEntityName = propType.Name;
+                        relatedEntity = session.Load(relatedEntityName, id, LockMode.None);
+                    }
+                }
+                else
+                {
+                    bool removeReverseRelationship = propType.UseLHSPrimaryKey;
+                    AddToGraph(entityInfo, relatedEntityInfo, removeReverseRelationship);
+                    relatedEntity = relatedEntityInfo.Entity;
                 }
             }
             return relatedEntity;
         }
 
         /// <summary>
+        /// Find a foreign key matching the given property, by looking in the fkMap.
+        /// The property may be defined on the class or a superclass, so this function calls itself recursively.
+        /// </summary>
+        /// <param name="propName">Name of the property e.g. "Product"</param>
+        /// <param name="meta">Class metadata, for traversing the class hierarchy</param>
+        /// <returns>The name of the foreign key, e.g. "ProductID"</returns>
+        private string FindForeignKey(string propName, IClassMetadata meta)
+        {
+            var relKey = meta.EntityName + '.' + propName;
+            if (fkMap.ContainsKey(relKey))
+            {
+                return fkMap[relKey];
+            }
+            else if (meta.IsInherited && meta is AbstractEntityPersister)
+            {
+                var superEntityName = ((AbstractEntityPersister)meta).MappedSuperclass;
+                var superMeta = session.SessionFactory.GetClassMetadata(superEntityName);
+                return FindForeignKey(propName, superMeta);
+            }
+            else
+            {
+                throw new ArgumentException("Foreign Key '" + relKey + "' could not be found.");
+            }
+        }
+
+        /// <summary>
         /// Get the value of the foreign key property.  This comes from the entity, but if that value is
-        /// null, we may try to get it from the originalValuesMap.
+        /// null, and the entity is deleted, we try to get it from the originalValuesMap.
         /// </summary>
         /// <param name="entityInfo">Breeze EntityInfo</param>
         /// <param name="meta">Metadata for the entity class</param>
         /// <param name="foreignKeyName">Name of the foreign key property of the entity, e.g. "CustomerID"</param>
-        /// <param name="currentValuesOnly">if false, and the entity is deleted, try to get the value from the originalValuesMap 
-        /// if we were unable to get it from the entity.</param>
         /// <returns></returns>
-        private object GetForeignKeyValue(EntityInfo entityInfo, IClassMetadata meta, string foreignKeyName, bool currentValuesOnly)
+        private object GetForeignKeyValue(EntityInfo entityInfo, IClassMetadata meta, string foreignKeyName)
         {
             var entity = entityInfo.Entity;
             object id = null;
@@ -225,7 +358,7 @@ namespace Breeze.WebApi.NH
                 }
             }
 
-            if (id == null && !currentValuesOnly && entityInfo.EntityState == EntityState.Deleted)
+            if (id == null && entityInfo.EntityState == EntityState.Deleted)
             {
                 entityInfo.OriginalValuesMap.TryGetValue(foreignKeyName, out id);
             }
@@ -254,18 +387,19 @@ namespace Breeze.WebApi.NH
         /// <param name="entityType">Type of entity, e.g. Order</param>
         /// <param name="entityId">Key value of the entity</param>
         /// <returns>The entity, or null if not found</returns>
-        private object FindInSaveMap(Type entityType, object entityId)
+        private EntityInfo FindInSaveMap(Type entityType, object entityId)
         {
-            var entityIdString = entityId.ToString();
-            List<EntityInfo> entityInfoList;
-            if (saveMap.TryGetValue(entityType, out entityInfoList))
+            List<EntityInfo> entityInfoList = saveMap.Where(p => entityType.IsAssignableFrom(p.Key)).SelectMany(p => p.Value).ToList();
+            if (entityInfoList != null && entityInfoList.Count != 0)
             {
+                var entityIdString = entityId.ToString();
                 var meta = session.SessionFactory.GetClassMetadata(entityType);
                 foreach (var entityInfo in entityInfoList)
                 {
                     var entity = entityInfo.Entity;
                     var id = meta.GetIdentifier(entity, EntityMode.Poco);
-                    if (id != null && entityIdString.Equals(id.ToString())) return entity;
+                    if (id != null && entityIdString.Equals(id.ToString()))
+                        return entityInfo;
                 }
             }
             return null;

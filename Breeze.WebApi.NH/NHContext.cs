@@ -14,6 +14,8 @@ namespace Breeze.WebApi.NH {
   public class NHContext : ContextProvider, IDisposable {
     private ISession session;
     protected Configuration configuration;
+    private static Dictionary<Configuration, IDictionary<string, object>> _configurationMetadata = new Dictionary<Configuration, IDictionary<string, object>>();
+    private static object _metadataLock = new object();
 
     /// <summary>
     /// Create a new context for the given session.  
@@ -85,6 +87,19 @@ namespace Breeze.WebApi.NH {
       return keyValues;
     }
 
+    /// <summary>
+    /// Allows subclasses to process entities before they are saved.  This method is called
+    /// after BeforeSaveEntities(saveMap), and before any session.Save methods are called.
+    /// The foreign-key associations on the entities have been resolved, relating the entities
+    /// to each other, and attaching proxies for other many-to-one associations.
+    /// </summary>
+    /// <param name="entitiesToPersist">List of entities in the order they will be saved</param>
+    /// <returns>The same entitiesToPersist.  Overrides of this method may modify the list.</returns>
+    public virtual List<EntityInfo> BeforeSaveEntityGraph(List<EntityInfo> entitiesToPersist)
+    {
+        return entitiesToPersist;
+    }
+
     #region Metadata
 
     protected override string BuildJsonMetadata() {
@@ -101,8 +116,13 @@ namespace Breeze.WebApi.NH {
 
     protected IDictionary<string, object> GetMetadata() {
       if (_metadata == null) {
-        var builder = new NHBreezeMetadata(session.SessionFactory, configuration);
-        _metadata = builder.BuildMetadata();
+          lock (_metadataLock) {
+              if (!_configurationMetadata.TryGetValue(this.configuration, out _metadata)) {
+                  var builder = new NHBreezeMetadata(session.SessionFactory, configuration);
+                  _metadata = builder.BuildMetadata();
+                  _configurationMetadata.Add(this.configuration, _metadata);
+              }
+          }
       }
       return _metadata;
     }
@@ -118,21 +138,32 @@ namespace Breeze.WebApi.NH {
     /// Persist the changes to the entities in the saveMap.
     /// This implements the abstract method in ContextProvider.
     /// Assigns saveWorkState.KeyMappings, which map the temporary keys to their real generated keys.
+    /// Note that this method sets session.FlushMode = FlushMode.Never, so manual flushes are required.
     /// </summary>
     /// <param name="saveMap">Map of Type -> List of entities of that type</param>
     protected override void SaveChangesCore(SaveWorkState saveWorkState) {
       var saveMap = saveWorkState.SaveMap;
+      session.FlushMode = FlushMode.Never;
       var tx = session.Transaction;
       var hasExistingTransaction = tx.IsActive;
       if (!hasExistingTransaction) tx.Begin(BreezeConfig.Instance.GetTransactionSettings().IsolationLevelAs);
       try {
-        ProcessSaves(saveMap);
+        // Relate entities in the saveMap to other NH entities, so NH can save the FK values.
+        var fixer = GetRelationshipFixer(saveMap);
+        var saveOrder = fixer.FixupRelationships();
+          
+        // Allow subclass to process entities before we save them
+        saveOrder = BeforeSaveEntityGraph(saveOrder);
 
+        ProcessSaves(saveOrder);
+          
         session.Flush();
-        RemoveRelationships(saveMap);
         RefreshFromSession(saveMap);
         if (!hasExistingTransaction) tx.Commit();
-      } catch (PropertyValueException pve) {
+        fixer.RemoveRelationships();
+      }
+      catch (PropertyValueException pve)
+      {
         // NHibernate can throw this
         if (tx.IsActive) tx.Rollback();
         entityErrors.Add(new EntityError() {
@@ -154,30 +185,30 @@ namespace Breeze.WebApi.NH {
     }
 
     /// <summary>
-    /// Persist the changes to the entities in the saveMap.
+    /// Get a new NHRelationshipFixer using the saveMap and the foreign-key map from the metadata.
     /// </summary>
     /// <param name="saveMap"></param>
-    private void ProcessSaves(Dictionary<Type, List<EntityInfo>> saveMap) {
-      // Get the map of foreign key relationships
-      var fkMap = (IDictionary<string, string>)GetMetadata()[NHBreezeMetadata.FK_MAP];
-      var fixer = new NHRelationshipFixer(saveMap, fkMap, session);
+    /// <returns></returns>
+    protected NHRelationshipFixer GetRelationshipFixer(Dictionary<Type, List<EntityInfo>> saveMap) {
+        // Get the map of foreign key relationships from the metadata
+        var fkMap = (IDictionary<string, string>)GetMetadata()[NHBreezeMetadata.FK_MAP];
+        return new NHRelationshipFixer(saveMap, fkMap, session);
+    }
 
-      // Relate entities in the saveMap to each other
-      fixer.FixupRelationships(false);
-
-      foreach (var kvp in saveMap) {
-        var entityType = kvp.Key;
-        var classMeta = session.SessionFactory.GetClassMetadata(entityType);
-
-        foreach (var entityInfo in kvp.Value) {
+    /// <summary>
+    /// Persist the changes to the entities in the saveOrder.
+    /// </summary>
+    /// <param name="saveOrder"></param>
+    protected void ProcessSaves(List<EntityInfo> saveOrder) {
+      
+      var sessionFactory = session.SessionFactory;
+      foreach (var entityInfo in saveOrder)
+      {
+          var entityType = entityInfo.Entity.GetType();
+          var classMeta = sessionFactory.GetClassMetadata(entityType);
           AddKeyMapping(entityInfo, entityType, classMeta);
           ProcessEntity(entityInfo, classMeta);
-        }
       }
-
-      // Relate entities in the saveMap to other NH entities, so NH can save the FK values.
-      fixer.FixupRelationships(true);
-
     }
 
 
@@ -185,7 +216,7 @@ namespace Breeze.WebApi.NH {
     /// Add, update, or delete the entity according to its EntityState.
     /// </summary>
     /// <param name="entityInfo"></param>
-    private void ProcessEntity(EntityInfo entityInfo, IClassMetadata classMeta) {
+    protected void ProcessEntity(EntityInfo entityInfo, IClassMetadata classMeta) {
       var entity = entityInfo.Entity;
       var state = entityInfo.EntityState;
 
@@ -201,8 +232,8 @@ namespace Breeze.WebApi.NH {
       } else if (state == EntityState.Deleted) {
         session.Delete(entity);
       } else {
-        // Just re-associate the entity with the session.  Needed for many to many to get both ends into the session.
-        session.Lock(entity, LockMode.None);
+        // Ignore EntityState.Unchanged.  Too many problems using session.Lock or session.Merge
+        //session.Lock(entity, LockMode.None);
       }
     }
 
@@ -212,8 +243,8 @@ namespace Breeze.WebApi.NH {
     /// </summary>
     /// <param name="entityInfo"></param>
     /// <param name="classMeta"></param>
-    private void RestoreOldVersionValue(EntityInfo entityInfo, IClassMetadata classMeta) {
-      if (entityInfo.OriginalValuesMap == null) return;
+    protected void RestoreOldVersionValue(EntityInfo entityInfo, IClassMetadata classMeta) {
+      if (entityInfo.OriginalValuesMap == null || entityInfo.OriginalValuesMap.Count == 0) return;
       var vcol = classMeta.VersionProperty;
       var vname = classMeta.PropertyNames[vcol];
       object oldVersion;
@@ -229,7 +260,8 @@ namespace Breeze.WebApi.NH {
     /// Record the value of the temporary key in EntityKeyMapping
     /// </summary>
     /// <param name="entityInfo"></param>
-    private void AddKeyMapping(EntityInfo entityInfo, Type type, IClassMetadata meta) {
+    protected void AddKeyMapping(EntityInfo entityInfo, Type type, IClassMetadata meta) {
+      if (entityInfo.EntityState != EntityState.Added) return;
       var entity = entityInfo.Entity;
       var id = GetIdentifier(entity, meta);
       var km = new KeyMapping() { EntityTypeName = type.FullName, TempValue = id };
@@ -243,7 +275,7 @@ namespace Breeze.WebApi.NH {
     /// <param name="entity"></param>
     /// <param name="meta"></param>
     /// <returns></returns>
-    private object GetIdentifier(object entity, IClassMetadata meta = null) {
+    protected object GetIdentifier(object entity, IClassMetadata meta = null) {
       var type = entity.GetType();
       meta = meta ?? session.SessionFactory.GetClassMetadata(type);
 
@@ -271,7 +303,7 @@ namespace Breeze.WebApi.NH {
     /// <param name="entity"></param>
     /// <param name="meta"></param>
     /// <returns></returns>
-    private object[] GetIdentifierAsArray(object entity, IClassMetadata meta) {
+    protected object[] GetIdentifierAsArray(object entity, IClassMetadata meta) {
       var value = GetIdentifier(entity, meta);
       if (value.GetType().IsArray) {
         return (object[]) value;
@@ -284,7 +316,7 @@ namespace Breeze.WebApi.NH {
     /// Update the KeyMappings with their real values.
     /// </summary>
     /// <returns></returns>
-    private List<KeyMapping> UpdateAutoGeneratedKeys(List<EntityInfo> entitiesWithAutoGeneratedKeys) {
+    protected List<KeyMapping> UpdateAutoGeneratedKeys(List<EntityInfo> entitiesWithAutoGeneratedKeys) {
       var list = new List<KeyMapping>();
       foreach (var entityInfo in entitiesWithAutoGeneratedKeys) {
         KeyMapping km;
@@ -300,52 +332,17 @@ namespace Breeze.WebApi.NH {
       return list;
     }
 
-
-    /// <summary>
-    /// Remove the navigations between entities in the saveMap.  This flattens the JSON
-    /// result so Breeze can handle it.
-    /// </summary>
-    /// <param name="saveMap">Map of entity types -> entity instances to save</param>
-    private void RemoveRelationships(Dictionary<Type, List<EntityInfo>> saveMap) {
-      foreach (var kvp in saveMap) {
-        var entityType = kvp.Key;
-        var classMeta = session.SessionFactory.GetClassMetadata(entityType);
-
-        foreach (var entityInfo in kvp.Value) {
-          RemoveRelationships(entityInfo, classMeta);
-        }
-      }
-    }
-
-    /// <summary>
-    /// Set the navigation properties to null on the given entity.
-    /// </summary>
-    /// <param name="entityInfo"></param>
-    /// <param name="meta"></param>
-    private void RemoveRelationships(EntityInfo entityInfo, IClassMetadata meta) {
-      var entity = entityInfo.Entity;
-      var propNames = meta.PropertyNames;
-      var propTypes = meta.PropertyTypes;
-
-      for (int i = 0; i < propNames.Length; i++) {
-        var propType = propTypes[i];
-        if (propType.IsAssociationType && propType.IsEntityType) {
-          meta.SetPropertyValue(entity, propNames[i], null, EntityMode.Poco);
-        }
-      }
-    }
-
     /// <summary>
     /// Refresh the entities from the database.  This picks up changes due to triggers, etc.
     /// </summary>
     /// TODO make this faster
     /// TODO make this optional
     /// <param name="saveMap"></param>
-    private void RefreshFromSession(Dictionary<Type, List<EntityInfo>> saveMap) {
+    protected void RefreshFromSession(Dictionary<Type, List<EntityInfo>> saveMap) {
       //using (var tx = session.BeginTransaction()) {
         foreach (var kvp in saveMap) {
           foreach (var entityInfo in kvp.Value) {
-            if (entityInfo.EntityState != EntityState.Deleted)
+            if (entityInfo.EntityState == EntityState.Added || entityInfo.EntityState == EntityState.Modified)
               session.Refresh(entityInfo.Entity);
           }
         }

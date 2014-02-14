@@ -26,6 +26,42 @@
         }
     });
 
+    test("query by entity key without preexisting metadata", function() {
+        manager = new breeze.EntityManager(testFns.serviceName);
+        manager.fetchMetadata().then(function () { 
+            var empType = manager.metadataStore.getEntityType("Employee");
+            var entityKey = new EntityKey(empType, 1);
+            var query = EntityQuery.fromEntityKey(entityKey);
+            return manager.executeQuery(query);
+        }).then(function (data) {
+            var results = data.results;
+            ok(results.length === 1, "should have returned a single record");
+            var emp = results[0];
+        }).fail(testFns.handleFail).fin(start);
+     });
+
+    test("query same field twice", function () {
+        var manager = newEm();
+        var p = Predicate.create("freight", ">", 100).and("freight", "<", 200);
+
+        var query = new breeze.EntityQuery()
+            .from("Orders")
+            .where(p);
+        stop();
+        manager.executeQuery(query).then(function (data) {
+            var orders = data.results;
+            ok(orders.length > 0, "should be some results");
+            orders.forEach(function(o) {
+                var f = o.getProperty("freight");
+                if (f > 100 && f < 200) {
+
+                } else {
+                    ok(false, "freight should be > 100 and < 200");
+                }
+            });
+        }).fail(testFns.handleFail).fin(start);
+    });
+
     test("one to one", function () {
         var manager = newEm();
         var query = new breeze.EntityQuery()
@@ -104,11 +140,13 @@
     });
 
     test("test date in projection", function () {
-
+        
         var manager = newEm();
         var query = new breeze.EntityQuery()
             .from("Orders")
-            .where(testFns.orderKeyName, "==", 10248);
+            .where("orderDate", "!=", null)
+            .orderBy("orderDate")
+            .take(3);
 
         var orderDate;
         var orderDate2;
@@ -120,7 +158,9 @@
             var manager2 = newEm();
             var query = new breeze.EntityQuery()
                 .from("Orders")
-                .where(testFns.orderKeyName, "==", 10248)
+                .where("orderDate", "!=", null)
+                .orderBy("orderDate")
+                .take(3)
                 .select("orderDate");
             return manager2.executeQuery(query);
         }).then(function (data2) {
@@ -189,8 +229,10 @@
         stop();
         manager.executeQuery(query).then(function (data) {
             ok(data.results.length > 0, "there should be records returned");
-            var empId = data.results[0].getProperty("employeeID");
-            ok(empId < 6, "should <  6");
+            var empId = data.results[0].getProperty(testFns.employeeKeyName);
+            if (!testFns.DEBUG_MONGO) {
+                ok(empId < 6, "should <  6");
+            }
         }).fail(testFns.handleFail).fin(start);
 
     });
@@ -236,7 +278,46 @@
 
     });
 
-    test("OData predicate", function () {
+    test("OData predicate - date(year) function", function () {
+        if (testFns.DEBUG_MONGO) {
+            ok(true, "Mongo does not yet support the 'year' OData predicate");
+            return;
+        }
+        var manager = newEm();
+        var query = new breeze.EntityQuery()
+            .from("Employees")
+            .where("year(hireDate)", ">", 1993);
+        stop();
+        manager.executeQuery(query).then(function (data) {
+            var emps = data.results;
+            ok(emps.length > 0, "there should be records returned"); 
+            var emps2 = manager.executeQueryLocally(query);
+            ok(emps2.length == emps.length, "should be the same recs");
+            
+        }).fail(testFns.handleFail).fin(start);
+    });
+
+    test("OData predicate - date(month) function", function () {
+        if (testFns.DEBUG_MONGO) {
+            ok(true, "Mongo does not yet support the 'year' OData predicate");
+            return;
+        }
+        var manager = newEm();
+        var p = Predicate.create("month(hireDate)", ">", 6).and("month(hireDate)", "<", 11);
+        var query = new breeze.EntityQuery()
+            .from("Employees")
+            .where(p);
+        stop();
+        manager.executeQuery(query).then(function (data) {
+            var emps = data.results;
+            ok(emps.length > 0, "there should be records returned");
+            var emps2 = manager.executeQueryLocally(query);
+            ok(emps2.length == emps.length, "should be the same recs");
+
+        }).fail(testFns.handleFail).fin(start);
+    });
+
+    test("OData predicate - add ", function () {
         if (testFns.DEBUG_MONGO) {
             ok(true, "Mongo does not yet support the 'add' OData predicate");
             return;
@@ -257,7 +338,7 @@
         }).fail(testFns.handleFail).fin(start);
     });
 
-    test("OData predicate combined with regular predicate", function () {
+    test("OData predicate - add combined with regular predicate", function () {
         if (testFns.DEBUG_MONGO) {
             ok(true, "Mongo does not yet support the 'add' OData predicate");
             return;
@@ -536,15 +617,15 @@
     test("query with quotes", function () {
         var em = newEm();
 
-        var q = EntityQuery.from("Employees")
-            .where("firstName", 'contains', "abc''defg")
+        var q = EntityQuery.from("Customers")
+            .where("companyName", 'contains', "'")
             .using(em);
         stop();
 
         q.execute().then(function (data) {
-            ok(data.results.length === 0);
+            ok(data.results.length > 0);
             var r = em.executeQueryLocally(q);
-            ok(r.length === 0);
+            ok(r.length === data.results.length, "local query should return same subset");
         }).fail(testFns.handleFail).fin(start);
             
     });

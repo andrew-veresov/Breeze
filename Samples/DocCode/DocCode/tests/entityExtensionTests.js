@@ -1,13 +1,16 @@
 // ReSharper disable InconsistentNaming
+// ReSharper disable UnusedLocals
 (function (testFns) {
     "use strict";
 
     /*********************************************************
     * Breeze configuration and module setup 
     *********************************************************/
+    var breeze = testFns.breeze;
     var MetadataStore = breeze.MetadataStore;
     var EntityManager = breeze.EntityManager;
     var EntityQuery = breeze.EntityQuery;
+    var EntityState = breeze.EntityState;
 
     var moduleMetadataStore = new MetadataStore();
     var northwindService = testFns.northwindServiceName;
@@ -167,6 +170,71 @@
 
     });
 
+    
+    /*********************************************************
+    * Changes to properties within ctor do NOT change EntityState
+    * Doesn't matter if they are mapped or unmapped
+    *********************************************************/
+    asyncTest("changes to properties within ctor should not change EntityState", 3, function () {
+
+        var store = cloneModuleMetadataStore();
+        var employeeCtor = function () {
+            // Mapped properties
+            this.FirstName = "Jolly";
+            this.LastName = "Rodger";
+            // Unmapped property
+            this.FunkyName = "Funky";
+        };
+        store.registerEntityTypeCtor("Employee", employeeCtor);
+        
+        var em = newEm(store);
+
+        EntityQuery.from('Employees').top(1)
+            .using(em).execute()
+            .then(success).fail(handleFail).fin(start);
+
+        function success(data) {
+            var emp = data.results[0];
+            var stateName = emp.entityAspect.entityState.name;
+            equal(stateName, EntityState.Unchanged.name,
+                "queried entity whose ctor sets properties should remain Unchanged");
+            notEqual(emp.FirstName(), "Jolly",
+                "queried entity's initial FirstName should be overridden by query; is " + emp.FirstName());
+            deepEqual(emp.entityAspect.originalValues, {},
+                "queried entity should have no 'originalValues' and therefore no initial values to 'restore'.");
+        }
+    });
+
+    /*********************************************************
+    * changes to properties within custom initializer should not change EntityState
+    * even if change is to mapped property
+    *********************************************************/
+    asyncTest("changes to properties within custom initializer should not change EntityState", 3, function () {
+
+        var store = cloneModuleMetadataStore();
+        var employeeInitializer = function (emp) {           
+            emp.FirstName("Jolly"); // change a mapped property
+        };
+        store.registerEntityTypeCtor("Employee", null, employeeInitializer);
+
+        var em = newEm(store);
+
+        EntityQuery.from('Employees').top(1)
+            .using(em).execute()
+            .then(success).fail(handleFail).fin(start);
+
+        function success(data) {
+            var emp = data.results[0];
+            var stateName = emp.entityAspect.entityState.name;
+            equal(stateName, EntityState.Unchanged.name,
+                "queried entity whose initer set a mapped property should remain Unchanged");
+            equal(emp.FirstName(), "Jolly",
+                "queried entity's FirstName should be overridden by initer; is " + emp.FirstName());
+            deepEqual(emp.entityAspect.originalValues, {},
+                "queried entity should have no 'originalValues' and therefore no initial values to 'restore'.");
+        }
+    });
+
     /*********************************************************
     * when unmapped property changes, what happens to 
     * notifications, EntityState, and originalValues
@@ -187,7 +255,7 @@
         var cust = manager.createEntity(
             'Customer',
             { CustomerID: testFns.newGuidComb() },
-            breeze.EntityState.Unchanged);
+              EntityState.Unchanged);
 
         // Listen for foo changes
         var koFooNotified, breezeFooNotified;
@@ -200,14 +268,14 @@
         cust.foo(12345);
 
         ok(koFooNotified, "KO should have raised property changed for 'foo'.");
-        ok(breezeFooNotified, "Breeze should have raised its property changed for 'foo'.")
+        ok(breezeFooNotified, "Breeze should have raised its property changed for 'foo'.");
 
         var stateName = cust.entityAspect.entityState.name;
         equal(stateName, "Unchanged",
             "cust's EntityState should still be 'Unchanged'; it is " + stateName);
 
         var originalValues = cust.entityAspect.originalValues;
-        var hasOriginalValues;
+        var hasOriginalValues = null;
         for (var key in originalValues) {
             if (key === 'foo') {
                 hasOriginalValues = true;
@@ -218,6 +286,7 @@
         ok(hasOriginalValues,
             "'originalValues' have 'foo'; it is " + JSON.stringify(originalValues));
     });
+    
     /*********************************************************
     * reject changes should revert an unmapped property
     *********************************************************/
@@ -235,7 +304,7 @@
 
         // create a fake customer
         var cust = manager.createEntity("Customer", { CompanyName: "Acme" },
-            breeze.EntityState.Unchanged);
+                   EntityState.Unchanged);
         var touched = cust.lastTouched();
 
         // an hour passes ... and we visit the customer object
@@ -243,9 +312,11 @@
         cust.lastTouched(touched = new Date(touched.getTime() + 60000));
 
         // an hour passes ... and we visit to cancel
-        cust.lastTouched(touched = new Date(touched.getTime() + 60000));
+        cust.lastTouched(new Date(touched.getTime() + 60000));
+        
         cust.entityAspect.rejectChanges(); // roll back name change
-
+        //manager.rejectChanges(); // would have same effect. Obviously less granular
+        
         equal(cust.CompanyName(), "Acme", "'name' data property should be rolled back");
         ok(originalTime === cust.lastTouched(),
             "'lastTouched' unmapped property should be rolled back. Started as {0}; now is {1}"
@@ -308,7 +379,7 @@
             description = op + " entityExtensionTest";
             todo.Description(description);
         }
-        function saveSucceeded(saveResult) {
+        function saveSucceeded(/*saveResult*/) {
 
             notEqual(todo.foo(), 0, "'foo' retains its '{0}' value after '{1}' save succeeded but ..."
                 .format(todo.foo(), operation));
@@ -550,12 +621,13 @@
             var store = cloneModuleMetadataStore();
 
             var Employee = function () {
-                this.FirstName = ko.observable(""); // default FirstName
-                this.LastName = ko.observable("");  // default LastName
-                this.fullName = ko.computed(
+                var self = this;
+                self.FirstName = ko.observable(""); // default FirstName
+                self.LastName = ko.observable("");  // default LastName
+                self.fullName = ko.computed(
                         function () {
-                            return this.FirstName() + " " + this.LastName();
-                        }, this);
+                            return self.FirstName() + " " + self.LastName();
+                        });
             };
 
             store.registerEntityTypeCtor("Employee", Employee);
@@ -600,7 +672,7 @@
         var companyNameNotificationCount = 0;
         var customerInitializer = function(customer) {
             customer.CompanyName.subscribe(
-                function (newValue) {
+                function (/*newValue*/) {
                     companyNameNotificationCount += 1;
             });
         };
@@ -683,12 +755,6 @@
         var store = cloneModuleMetadataStore();
 
         // define and register employee initializer
-        var employeeInitializer = function (employee) {
-            employee.foo = "Foo " + employee.LastName();
-            employee.fooComputed = ko.computed(function() {
-                return "Foo " + employee.LastName();
-            }, this);
-        };
         store.registerEntityTypeCtor("Employee", null, employeeFooInitializer);
 
         // define manager using prepared test store
@@ -914,8 +980,8 @@
                 function () { // ctor
                     actual.push(expected.ctor);
                 },
-                function (cust) { // initializer
-                    if (cust.CompanyName !== null) {
+                function (c) { // initializer
+                    if (c.CompanyName !== null) {
                         // CompanyName setting must have happened before this initializer
                         actual.push(expected.initVals); 
                     }
@@ -932,6 +998,7 @@
             
             /* ACT */
             var cust = em.createEntity('Customer', {
+// ReSharper restore UnusedLocals
                 CustomerID: testFns.newGuidComb(),
                 CompanyName: expected[1]
             });

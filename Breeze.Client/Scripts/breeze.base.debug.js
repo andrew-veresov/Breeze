@@ -21,7 +21,7 @@
 
 })(function () {  
     var breeze = {
-        version: "1.4.7",
+        version: "1.4.8",
         metadataVersion: "1.0.5"
     };
 
@@ -350,7 +350,7 @@ function __requireLib(libNames, errMessage) {
         throw new Error("Unable to initialize " + libNames + ".  " + errMessage || "");
     }
 }
-    
+
 // Returns the 'libName' module if loaded or else returns undefined
 function __requireLibCore(libName) {
     var window = this.window;
@@ -1297,7 +1297,7 @@ var Event = (function() {
         });
     @method publish
     @param data {Object} Data to publish
-    @param [publishAsync=false] Whether to publish asynchonously or not.
+    @param [publishAsync=false] {Boolean} Whether to publish asynchonously or not.
     @param [errorCallback] {Function} Will be called for any errors that occur during publication. If omitted, 
     errors will be eaten.
 
@@ -5258,7 +5258,7 @@ var DataType = (function () {
     };
 
     var fmtString = function (val) {
-        return val == null ? null : "'" + val + "'";
+        return val == null ? null : "'" + val.replace(/'/g,"''") + "'";
     };
 
     var fmtInt = function (val) {
@@ -5354,7 +5354,7 @@ var DataType = (function () {
     DataType.Int64 = DataType.addSymbol({
         defaultValue: 0, isNumeric: true, isInteger: true, quoteJsonOData: true,
         parse: coerceToInt,
-        fmtOData: fmtInt,
+        fmtOData: makeFloatFmt("L"),
         getNext: getNextNumber
     });
     /**
@@ -6002,6 +6002,7 @@ var MetadataStore = (function () {
     in the MetadataStore an exception will be thrown. 
     @method addDataService
     @param dataService {DataService} The DataService to add
+    @param [shouldOverwrite=false] {Boolean} Permit overwrite of existing DataService rather than throw exception
     **/
         
     proto.addDataService = function(dataService, shouldOverwrite) {
@@ -6126,6 +6127,7 @@ var MetadataStore = (function () {
         newMetadataStore.importMetadata(metadataFromStorage);
     @method importMetadata
     @param exportedMetadata {String|JSON Object} A previously exported MetadataStore.
+    @param [allowMerge] {Boolean} Allows custom metadata to be merged into existing metadata types.
     @return {MetadataStore} This MetadataStore.
     @chainable
     **/
@@ -6875,14 +6877,14 @@ var CsdlMetadataParser = (function () {
 
         var principal = constraint.principal;
         var dependent = constraint.dependent;
-        var propRefs;
+        
+        var propRefs = __toArray(dependent.propertyRef);
+        var fkNames = propRefs.map(__pluck("name"));
         if (csdlProperty.fromRole === principal.role) {
-            propRefs = __toArray(principal.propertyRef);
-            cfg.invForeignKeyNamesOnServer = propRefs.map(__pluck("name"));
+            cfg.invForeignKeyNamesOnServer = fkNames;
         } else {
-            propRefs = __toArray(dependent.propertyRef);
             // will be used later by np._update
-            cfg.foreignKeyNamesOnServer = propRefs.map(__pluck("name"));
+            cfg.foreignKeyNamesOnServer = fkNames;
         }
 
         var np = new NavigationProperty(cfg);
@@ -7880,8 +7882,8 @@ var EntityType = (function () {
             np.invForeignKeyNames.forEach(function (invFkName) {
                 var fkProp = entityType.getDataProperty(invFkName);
                 var invEntityType = np.parentType;
-                fkProp.inverseNavigationProperty = __arrayFirst(invEntityType.navigationProperties, function (np) {
-                    return np.invForeignKeyNames && np.invForeignKeyNames.indexOf(fkProp.name) >= 0;
+                fkProp.inverseNavigationProperty = __arrayFirst(invEntityType.navigationProperties, function (np2) {
+                    return np2.invForeignKeyNames && np2.invForeignKeyNames.indexOf(fkProp.name) >= 0 && np2.entityType === fkProp.parentType;
                 });
                 // entityType.foreignKeyProperties.push(fkProp);
                 addUniqueItem(entityType.foreignKeyProperties, fkProp);
@@ -8138,6 +8140,7 @@ var ComplexType = (function () {
         "_updateCps",
         "_initializeInstance",
         "_updateTargetFromRaw",
+        "_clientPropertyPathToServer",
         "_setCtor"
     ]);
     
@@ -9618,7 +9621,7 @@ var EntityQuery = (function () {
             .noTracking(true);
    
 
-    @method inlineCount
+    @method noTracking
     @param enabled {Boolean=true} Whether or not the noTracking capability should be enabled. If this parameter is omitted, true is assumed. 
     @return {EntityQuery}
     @chainable
@@ -10162,11 +10165,11 @@ var QueryFuncs = (function() {
         round:       { fn: function (source) { return Math.round(source); }, dataType: DataType.Int32 },
         ceiling:     { fn: function (source) { return Math.ceil(source); }, dataType: DataType.Int32 },
         floor:       { fn: function (source) { return Math.floor(source); }, dataType: DataType.Int32 },
-        second:      { fn: function (source) { return source.second; }, dataType: DataType.Int32 },
-        minute:      { fn: function (source) { return source.minute; }, dataType: DataType.Int32 },
-        day:         { fn: function (source) { return source.day; }, dataType: DataType.Int32 },
-        month:       { fn: function (source) { return source.month; }, dataType: DataType.Int32 },
-        year:        { fn: function (source) { return source.year; }, dataType: DataType.Int32 }
+        second:      { fn: function (source) { return source.getSeconds(); }, dataType: DataType.Int32 },
+        minute:      { fn: function (source) { return source.getMinutes(); }, dataType: DataType.Int32 },
+        day:         { fn: function (source) { return source.getDate(); }, dataType: DataType.Int32 },
+        month:       { fn: function (source) { return source.getMonth() + 1; }, dataType: DataType.Int32 },
+        year:        { fn: function (source) { return source.getFullYear(); }, dataType: DataType.Int32 }
     };
         
     return obj;
@@ -10189,7 +10192,7 @@ var FnNode = (function() {
             // value is either a string, a quoted string, a number, a bool value, or a date
             // if a string ( not a quoted string) then this represents a property name.
             var firstChar = value.substr(0,1);
-            var quoted = firstChar === "'" || firstChar === '"';
+            var quoted = (firstChar === "'" || firstChar === '"') && value.length > 1 && value.substr(value.length - 1) === firstChar;
             if (quoted) {
                 var unquoted = value.substr(1, value.length - 2);
                 this.fn = function (entity) { return unquoted; };
@@ -10404,7 +10407,7 @@ var FilterQueryOp = (function () {
     @final
     @static
     **/
-    aEnum.Contains = aEnum.addSymbol({ operator: "substringof", isFunction: true, isStringFn: true });
+    aEnum.Contains = aEnum.addSymbol({ operator: "substringof", aliases: ["contains"], isFunction: true, isStringFn: true });
     /**
     @property StartsWith {FilterQueryOp}
     @final
@@ -12353,7 +12356,7 @@ var EntityManager = (function () {
         mergeStrategy = assertParam(mergeStrategy, "mergeStrategy").isEnumOf(MergeStrategy).isOptional().check(MergeStrategy.Disallowed);
 
         if (entity.entityType.metadataStore !== this.metadataStore) {
-            throw new Error("Cannot attach this entity because the EntityType and MetadataStore associated with this entity does not match this EntityManager's MetadataStore.");
+            throw new Error("Cannot attach this entity because the EntityType (" + entity.entityType.name + ") and MetadataStore associated with this entity does not match this EntityManager's MetadataStore.");
         }
         var aspect = entity.entityAspect;
         if (aspect) {
@@ -13684,7 +13687,7 @@ var EntityManager = (function () {
             } else {
                 // we will allow attaches of entities where only part of the key is set.
                 if (keyPropsWithDefaultValues.length === ek.values.length) {
-                    throw new Error("Cannot attach an object to an EntityManager without first setting its key or setting its entityType 'AutoGeneratedKeyType' property to something other than 'None'");
+                    throw new Error("Cannot attach an object of type  (" + entity.entityType.name + ") to an EntityManager without first setting its key or setting its entityType 'AutoGeneratedKeyType' property to something other than 'None'");
                 }
             }
         }

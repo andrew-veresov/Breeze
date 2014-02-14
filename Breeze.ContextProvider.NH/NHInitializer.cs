@@ -1,4 +1,5 @@
 ﻿using NHibernate;
+using NHibernate.Proxy;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -67,9 +68,24 @@ namespace Breeze.ContextProvider.NH
             if (remainingDepth < 0 || parent == null) return;
             remainingDepth--;
             var type = parent.GetType();
-            if (!map.ContainsKey(type)) return;
+            List<string> propNames;
+            if (map.ContainsKey(type))
+            {
+                propNames = map[type];
+            }
+            else
+            {
+                if ((type.Name.StartsWith("<") || type.Name.StartsWith("_")) && map.ContainsKey(typeof(Type)))
+                {
+                    // anonymous type - get the values using "Type"
+                    propNames = map[typeof(Type)];
+                }
+                else
+                {
+                    return;
+                }
+            }
 
-            var propNames = map[type];
             foreach (var name in propNames)
             {
                 // Get the child object for the property name
@@ -90,6 +106,12 @@ namespace Breeze.ContextProvider.NH
                 else
                 {
                     NHibernateUtil.Initialize(child);
+                    var proxy = child as INHibernateProxy;
+                    if (proxy != null)
+                    {
+                        child = proxy.HibernateLazyInitializer.GetImplementation();
+                    }
+
                     InitializeWithCascade(child, map, remainingDepth);
                 }
             }

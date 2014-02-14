@@ -51,9 +51,9 @@
     }
  }
 
-start          = query
+start         = query
 
-wsp                         =  ' '  //Whitespace
+wsp           =  ' '  //Whitespace
 
 
 hexdigit      =   [0-9a-fA-F]
@@ -202,16 +202,16 @@ select                      =  "$select=" expr:selectExpr { return { "$select": 
                             /  "$select=" .* { return {"error": 'invalid $select parameter'}; }
 
 
+
 // returns an array of paths
 selectExpr                  =  wsp* a:identifierPath list:( wsp* "," wsp* ip:identifierPath {return ip})* { return flatten2(a, list) }
 
-identifierPath              =  a:identifier list:("/" ip:identifierPath {return ip})* { return buildString(a, list, "/"); }
-
+anyAll   = "/any" / "/all"
+identifierPath              =  a:identifier list:(!anyAll "/" ip:identifierPath {return ip})* { return buildString(a, list, "/"); }
 
 //filter
 filter                      =  "$filter=" expr:filterExpr { return { "$filter": expr  }; }
                             /  "$filter=" .* { return {"error": 'invalid $filter parameter'}; }
-
 
 filterExpr = wsp* p1:n0Expr x:(andOrExpr)*  {
    if (x.length > 0) {
@@ -237,14 +237,27 @@ n1Expr   = wsp* p1:n2Expr x:(mathExpr)* {
       }
 }
 
-n2Expr   =  literal / parenExpr / unaryExpr / methodCallExpr / memberExpr
+n2Expr   =  anyAllExpr / literal / parenExpr / unaryExpr / methodCallExpr / memberExpr
+
+// Orders/any(x1: x1/Freight gt 950m)
+anyAllPath                  =  member:identifierPath "/" op:anyAllOp {
+    return { member: member, op: op };
+}
+
+anyAllExpr = wsp* anyAllPath:anyAllPath "(" wsp* lambda:identifier ":" wsp+ subquery:filterExpr wsp* ")" {
+    if (lambda) {
+        return { type: "op_anyAll", op:anyAllPath.op, member:anyAllPath.member, lambda:lambda[0], subquery:subquery };
+    } else {
+        return { type: "op_anyAll", op:anyAllPath.op, member:anyAllPath.member };
+    }
+}
 
 andOrExpr  =   wsp+ op:andOrOp  wsp+ p2:filterExpr { return { type: "op_andOr", op:op, p2: p2 }}
 boolExpr   =   wsp+ op:boolOp   wsp+ p2:n0Expr   { return { type: "op_bool",  op:op, p2: p2 }}
 mathExpr   =   wsp+ op:mathOp   wsp+ p2:n1Expr   { return { type: "op_math",  op:op, p2: p2 }}
 
 memberExpr  =  member:identifierPath           { return { type: "member", value:  member  } }
-parenExpr   = "("  expr:filterExpr  ")"          { return  expr   }
+parenExpr   =  wsp* "("  expr:filterExpr wsp* ")"          { return  expr   }
 
 unaryExprOp =  "not " / "-"
 unaryExpr   = op:unaryExprOp expr:filterExpr     { return { type: "op_unary", op: op, p1: expr } }
@@ -262,16 +275,10 @@ unaryExpr   = op:unaryExprOp expr:filterExpr     { return { type: "op_unary", op
 boolOp = "eq" / "ne" / "lt" / "le" / "gt" / "ge"
 mathOp = "add" / "sub" / "mul" / "div" / "mod"
 andOrOp =  "and" / "or"
-
-// subExpr = identifierPart / anyMethodCallExpr / allMethodCallExpr
-
-lambdaVariable = identifier + ":"
-lambdaExpr     = lambdaVariable  filterExpr
+anyAllOp = "any" / "all"
 
 
-methodCallExpr          =   anyMethodCallExpr
-                          / allMethodCallExpr
-                          / replaceMethodCallExpr
+methodCallExpr          =  replaceMethodCallExpr
                           / substring2MethodCallExpr
                           / substring3MethodCallExpr
                           / toLowerMethodCallExpr
@@ -295,8 +302,7 @@ methodCallExpr          =   anyMethodCallExpr
                           / startsWithMethodCallExpr
                           / endsWithMethodCallExpr
 
-anyMethodCallExpr         = n:"any"         a:larg    { return fn(n, a); }
-allMethodCallExpr         = n:"all"         a:larg    { return fn(n, a); }
+
 replaceMethodCallExpr     = n:"replace"     a:args3   { return fn(n, a); }
 substring3MethodCallExpr  = n:"substring"   a:args3   { return fn(n, a); }
 substring2MethodCallExpr  = n:"substring"   a:args2   { return fn(n, a); }
@@ -323,7 +329,6 @@ floorMethodCallExpr       = n:"floor"       a:args1   { return fn(n, a); }
 isOf1MethodCallExpr       = n:"isof"        a:args1   { return fn(n, a); }
 isOf2MethodCallExpr       = n:"isof"        a:args2   { return fn(n, a); }
 
-larg  = "(" p1:lambdaExpr ")"                               { return [ p1 ]; }
 args1 = "(" p1:filterExpr ")"                                 { return [ p1 ]; }
 args2 = "(" p1:filterExpr "," p2:filterExpr ")"                 { return [ p1, p2 ]; }
 args3 = "(" p1:filterExpr "," p2:filterExpr "," p3:filterExpr ")" { return [ p1, p2, p3 ]; }

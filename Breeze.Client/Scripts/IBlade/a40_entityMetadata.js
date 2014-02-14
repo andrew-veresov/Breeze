@@ -113,6 +113,7 @@ var MetadataStore = (function () {
     in the MetadataStore an exception will be thrown. 
     @method addDataService
     @param dataService {DataService} The DataService to add
+    @param [shouldOverwrite=false] {Boolean} Permit overwrite of existing DataService rather than throw exception
     **/
         
     proto.addDataService = function(dataService, shouldOverwrite) {
@@ -237,6 +238,7 @@ var MetadataStore = (function () {
         newMetadataStore.importMetadata(metadataFromStorage);
     @method importMetadata
     @param exportedMetadata {String|JSON Object} A previously exported MetadataStore.
+    @param [allowMerge] {Boolean} Allows custom metadata to be merged into existing metadata types.
     @return {MetadataStore} This MetadataStore.
     @chainable
     **/
@@ -986,14 +988,14 @@ var CsdlMetadataParser = (function () {
 
         var principal = constraint.principal;
         var dependent = constraint.dependent;
-        var propRefs;
+        
+        var propRefs = __toArray(dependent.propertyRef);
+        var fkNames = propRefs.map(__pluck("name"));
         if (csdlProperty.fromRole === principal.role) {
-            propRefs = __toArray(principal.propertyRef);
-            cfg.invForeignKeyNamesOnServer = propRefs.map(__pluck("name"));
+            cfg.invForeignKeyNamesOnServer = fkNames;
         } else {
-            propRefs = __toArray(dependent.propertyRef);
             // will be used later by np._update
-            cfg.foreignKeyNamesOnServer = propRefs.map(__pluck("name"));
+            cfg.foreignKeyNamesOnServer = fkNames;
         }
 
         var np = new NavigationProperty(cfg);
@@ -1991,8 +1993,8 @@ var EntityType = (function () {
             np.invForeignKeyNames.forEach(function (invFkName) {
                 var fkProp = entityType.getDataProperty(invFkName);
                 var invEntityType = np.parentType;
-                fkProp.inverseNavigationProperty = __arrayFirst(invEntityType.navigationProperties, function (np) {
-                    return np.invForeignKeyNames && np.invForeignKeyNames.indexOf(fkProp.name) >= 0;
+                fkProp.inverseNavigationProperty = __arrayFirst(invEntityType.navigationProperties, function (np2) {
+                    return np2.invForeignKeyNames && np2.invForeignKeyNames.indexOf(fkProp.name) >= 0 && np2.entityType === fkProp.parentType;
                 });
                 // entityType.foreignKeyProperties.push(fkProp);
                 addUniqueItem(entityType.foreignKeyProperties, fkProp);
@@ -2249,6 +2251,7 @@ var ComplexType = (function () {
         "_updateCps",
         "_initializeInstance",
         "_updateTargetFromRaw",
+        "_clientPropertyPathToServer",
         "_setCtor"
     ]);
     
@@ -2363,7 +2366,7 @@ var DataProperty = (function () {
                 } else {
                     this.defaultValue = this.dataType.defaultValue;
                     if (this.defaultValue == null) {
-                        throw new Error("A nonnullable DataProperty cannot have a null defaultValue. Name: " + this.name);
+                        throw new Error("A nonnullable DataProperty cannot have a null defaultValue. Name: " + (this.name || this.nameOnServer);
                     }
                 }
             }

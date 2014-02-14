@@ -1,9 +1,9 @@
 ﻿// Only one of the next 5 should be uncommented.
-#define CODEFIRST_PROVIDER
+//#define CODEFIRST_PROVIDER
 //#define DATABASEFIRST_OLD
 //#define DATABASEFIRST_NEW
 //#define ORACLE_EDMX
-//#define NHIBERNATE
+#define NHIBERNATE
 
 
 #define CLASS_ACTIONFILTER
@@ -769,7 +769,7 @@ namespace Sample_WebApi.Controllers {
 
     [HttpGet]
 #if NHIBERNATE
-    public IQueryable<Object> CompanyInfoAndOrders(ODataQueryOptions options) {
+    public IQueryable<Object> CompanyInfoAndOrders(System.Web.Http.OData.Query.ODataQueryOptions options) {
         // Need to handle this specially for NH, to prevent $top being applied to Orders
         var query = ContextProvider.Context.Customers;
         var queryHelper = new NHQueryHelper();

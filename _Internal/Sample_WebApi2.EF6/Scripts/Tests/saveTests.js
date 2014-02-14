@@ -51,7 +51,7 @@
             var empKey = emp.entityAspect.getKey();
             similarEmp = em2.createEntity("Employee");
             similarEmp.setProperty(testFns.employeeKeyName, empKeyValue);
-            similarAspect = similarEmp.aspect;
+            similarAspect = similarEmp.entityAspect;
             similarAspect.setUnchanged();
             similarAspect.setDeleted();
             ok(similarAspect.entityState.isDeleted(), "should be deleted");
@@ -67,6 +67,12 @@
     });
 
     test("pk update", function () {
+
+        if (testFns.DEBUG_MONGO) {
+            ok(true, "TODO for Mongo - needs to be written specifically for Mongo - should succeed in Mongo");
+            return;
+        }
+
         var em = newEm();
 
         var q = new EntityQuery("Territories").orderBy("territoryID desc").take(1);
@@ -88,6 +94,83 @@
             var isOk = e.message.indexOf("part of the entity's key") > 0;
             ok(isOk, "error message should mention the entity key");
         }).fail(testFns.handleFail).fin(start);
+    });
+
+    test("product update active", function () { 
+        updateProduct(4);
+    });
+    test("product update discontinued", function () {
+        updateProduct(5);
+    });
+
+    function updateProduct(productId) {
+
+        if (testFns.DEBUG_MONGO) {
+            ok(true, "TODO for Mongo - needs to be written specifically for Mongo - should succeed in Mongo");
+            return;
+        }
+
+        var em = newEm();
+
+        var q = new EntityQuery("Products").where("productID", "eq", productId);
+        stop();
+        var order;
+        var freight;
+        q.using(em).execute().then(function (data) {
+            ok(data.results.length === 1, "should be one result");
+            var product = data.results[0];
+            var unitsInStock = product.getProperty("unitsInStock");
+            product.setProperty("unitsInStock", unitsInStock + 10);
+            return em.saveChanges();
+        }).then(function (sr) {
+            ok(true, "save succeeded");
+        }).fail(function (e) {
+            ok(false, "error on save: " + e.message);
+        }).fail(testFns.handleFail).fin(start);
+    }
+
+    test("add UserRole", function () {
+        if (testFns.DEBUG_MONGO) {
+            ok(true, "TODO for Mongo - needs to be written specifically for Mongo - should succeed in Mongo");
+            return;
+        }
+
+        var em = newEm();
+        var roleId;
+        var userId = 6;
+        var p2 = breeze.Predicate.create("userId", "ne", userId);
+        var p1 = breeze.Predicate.create("userRoles", "all", p2);
+
+        var q = new EntityQuery("Roles").where(p1).take(1);
+        stop();
+        q.using(em).execute().then(function (data) {
+            ok(data.results.length === 1, "should be one result");
+            var role = data.results[0];
+            roleId = role.getProperty("id");
+
+            var newUserRole = em.createEntity('UserRole', {
+                userId: userId,
+                roleId: roleId
+            });
+
+            return em.saveChanges();
+        }).then(function (sr) {
+            ok(true, "save succeeded");
+            var resultRole = sr.entities[0];
+            var roleId2 = resultRole.getProperty("roleId");
+            ok(roleId2 === roleId, "roleIds match");
+            var userId2 = resultRole.getProperty("userId");
+            ok(userId2 === userId, "userIds match");
+            
+            // delete entity
+            resultRole.entityAspect.setDeleted();
+            return em.saveChanges();
+        }).then(function (sr) {
+            ok(true, "delete succeeded");
+        }).fail(function (e) {
+            ok(false, "error on save: " + e.message);
+        }).fail(testFns.handleFail).fin(start);
+
     });
 
     test("exceptions thrown on server", function () {
@@ -164,6 +247,11 @@
     //});
 
     test("check unmapped property on server", function () {
+
+        if (testFns.DEBUG_MONGO) {
+            ok(true, "N/A for Mongo - Have not yet added SaveCheck code for Mongo");
+            return;
+        }
         
         var em = newEm(MetadataStore.importMetadata(testFns.metadataStore.exportMetadata()));
         var customerType = em.metadataStore.getEntityType("Customer");
@@ -188,6 +276,11 @@
     });
 
     test("test unmapped property serialization on server", function () {
+
+        if (testFns.DEBUG_MONGO) {
+            ok(true, "N/A for Mongo - Have not yet added SaveCheck code for Mongo");
+            return;
+        }
 
         var em = newEm(MetadataStore.importMetadata(testFns.metadataStore.exportMetadata()));
         var customerType = em.metadataStore.getEntityType("Customer");
@@ -231,6 +324,11 @@
 
     test("test unmapped property suppression", function () {
 
+        if (testFns.DEBUG_MONGO) {
+            ok(true, "N/A for Mongo - Have not yet added SaveCheck code for Mongo");
+            return;
+        }
+
         var em = newEm(MetadataStore.importMetadata(testFns.metadataStore.exportMetadata()));
         var customerType = em.metadataStore.getEntityType("Customer");
         customerType.setProperties({
@@ -273,7 +371,7 @@
         };
 
         if (testFns.DEBUG_MONGO) {
-            ok(true, "NA for Mongo - server side 'test' logic not yet implemented");
+            ok(true, "N/A for Mongo - Have not yet added SaveCheck code for Mongo");
             return;
         }
 
@@ -375,6 +473,43 @@
             equal(internationalOrderID, orderId,
                 "the new internationalOrder should have the same OrderID as its new parent Order, " + orderId);
             ok(orderId > 0, "the OrderID is positive, indicating it is a permanent order");
+
+        }).fail(testFns.handleFail).fin(start);
+
+    });
+
+    test("can save a Northwind Order & OrderDetail", function () {
+        if (testFns.DEBUG_MONGO) {
+            ok(true, "N/A for Mongo - primary keys cannot be shared between collections");
+            return;
+        }
+        // Create and initialize entity to save
+        var em = newEm();
+
+        var order = em.createEntity('Order', {
+            customerID: wellKnownData.alfredsID,
+            employeeID: wellKnownData.nancyID,
+            shipName: "Test " + new Date().toISOString()
+        });
+
+        var orderDetail1 = em.createEntity('OrderDetail', {
+            order: order, // sets OrderID and pulls it into the order's manager
+            productID: wellKnownData.chaiProductID, // wellKnownData.alfredsOrderDetailKey.ProductID
+            quantity: 5
+        });
+        var orderDetail2 = em.createEntity('OrderDetail', {
+            order: order, // sets OrderID and pulls it into the order's manager
+            productID: wellKnownData.alfredsOrderDetailKey.ProductID,
+            quantity: 6
+        });
+        stop();
+        em.saveChanges().then(function (data) {
+
+            var orderId = order.getProperty("orderID");
+            ok(orderId > 0, "orderID is positive");
+
+            
+
 
         }).fail(testFns.handleFail).fin(start);
 
@@ -643,14 +778,14 @@
 
         var em = newEm();
 
-        var q = new EntityQuery("Orders").where("shipCity", "ne", null).take(1);
+        var q = new EntityQuery("Orders").where("shipCountry", "ne", null).take(1);
         stop();
-        var order, freight, shipCity;
+        var order, freight, shipCountry;
         q.using(em).execute().then(function (data) {
             order = data.results[0];
             freight = order.getProperty("freight");
-            shipCity = testFns.morphString(order.getProperty("shipCity"));
-            order.setProperty("shipCity", shipCity);
+            shipCountry = testFns.morphString(order.getProperty("shipCountry"));
+            order.setProperty("shipCountry", shipCountry);
             var so = new SaveOptions({ resourceName: "SaveWithFreight", tag: "freight update-force" });
             return em.saveChanges(null, so);
         }).then(function (sr) {
@@ -672,14 +807,14 @@
 
         var em = newEm();
 
-        var q = new EntityQuery("Orders").where("shipCity", "ne", null).take(1);
+        var q = new EntityQuery("Orders").where("shipCountry", "ne", null).take(1);
         stop();
         var order, freight, shipCity;
         q.using(em).execute().then(function (data) {
             order = data.results[0];
             freight = order.getProperty("freight");
-            shipCity = testFns.morphString(order.getProperty("shipCity"));
-            order.setProperty("shipCity", shipCity);
+            shipCity = testFns.morphString(order.getProperty("shipCountry"));
+            order.setProperty("shipCountry", shipCity);
             var so = new SaveOptions({ resourceName: "SaveWithFreight", tag: "freight update-ov" });
             return em.saveChanges(null, so);
         }).then(function (sr) {
@@ -1573,6 +1708,11 @@
             ok(true, "Skipped tests - not applicable to OData");
             return;
         };
+
+        if (testFns.DEBUG_MONGO) {
+            ok(true, "TODO for Mongo - need to create this test");
+            return;
+        }
 
         var em = newEm();
         var q = new EntityQuery()
