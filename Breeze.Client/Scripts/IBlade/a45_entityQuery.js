@@ -490,6 +490,27 @@ var EntityQuery = (function () {
         enabled = (enabled === undefined) ? true : !!enabled;
         return clone(this, "noTrackingEnabled", enabled);
     };
+	
+
+    /**
+    Returns a query with the 'asType' capability either enabled or disabled.  With 'asType' enabled, the results of this query
+    will be interpreted as entity or part of entity of provided type.
+	The 'asType' capability allows partial updates of the entities.
+
+    @example
+        var query = new EntityQuery("Customers")
+            .select("Id,Name")
+            .asType("Customer");
+   
+
+    @method asType
+    @param typeName {String} Type name to treat results as. 
+    @return {EntityQuery}
+    @chainable
+    **/
+    proto.asType = function (typeName) {
+        return clone(this, "asTypeName", typeName);
+    };
     
     /**
     Returns a copy of this EntityQuery with the specified {{#crossLink "EntityManager"}}{{/crossLink}}, {{#crossLink "DataService"}}{{/crossLink}}, 
@@ -739,6 +760,11 @@ var EntityQuery = (function () {
         // assertParam(throwErrorIfNotFound, "throwErrorIfNotFound").isBoolean().isOptional().check();
         var entityType = this.entityType;
         if (entityType) return entityType;
+		
+		if (this.asTypeName != undefined) {
+            entityType = metadataStore._getEntityType(this.asTypeName, true);
+            if (entityType) return entityType;
+        }
 
         var resourceName = this.resourceName;
         if (!resourceName) {
@@ -788,7 +814,7 @@ var EntityQuery = (function () {
             // resolve it, if possible, via the resourceName
             // do not cache this value in this case
             // cannot determine the resultEntityType if a selectClause is present.
-            return skipFromCheck ? null : (!this.selectClause) && this._getFromEntityType(metadataStore, false);
+            return skipFromCheck ? null : ((!this.selectClause) || this.asTypeName) && this._getFromEntityType(metadataStore, false);
         }
     };
 

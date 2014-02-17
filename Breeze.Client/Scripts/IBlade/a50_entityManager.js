@@ -1953,7 +1953,8 @@ var EntityManager = (function () {
                     dataService: dataService,
                     mergeOptions: {
                         mergeStrategy: queryOptions.mergeStrategy,
-                        noTracking: !!query.noTrackingEnabled
+                        noTracking: !!query.noTrackingEnabled,
+						asTypeName: query.asTypeName
                     }
             });
             

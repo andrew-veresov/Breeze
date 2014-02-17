@@ -76,7 +76,7 @@ var MappingContext = (function () {
             return refValue;
         } else if (meta.entityType) {
             var entityType = meta.entityType;
-            if (mc.mergeOptions.noTracking) {
+            if (!mc.mergeOptions.asTypeName && mc.mergeOptions.noTracking) {
                 node = processNoMerge(mc, entityType, node);
                 if (entityType.noTrackingFn) {
                     node = entityType.noTrackingFn(node, entityType);
