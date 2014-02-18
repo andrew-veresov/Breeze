@@ -74,9 +74,9 @@
 
         var that = this;
         var params = {
-            type: "GET",
+            type: mappingContext.query.method,
             url: url,
-            params: mappingContext.query.parameters,
+            params: mappingContext.query.method != "GET" ? JSON.stringify(mappingContext.query.parameters) : mappingContext.query.parameters,
             dataType: 'json',
             success: function (httpResponse) {
                 var data = httpResponse.data;
@@ -102,6 +102,9 @@
                 handleHttpError(deferred, httpResponse);
             }
         };
+		if (mappingContext.query.method != "GET") {
+			params.contentType = "application/json; charset=utf-8";
+		}
         if (mappingContext.dataService.useJsonp) {
             params.dataType = 'jsonp';
             params.crossDomain = true;

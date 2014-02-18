@@ -196,6 +196,22 @@ var Param = (function () {
         }
         return msg;
     }
+	
+	proto.isHttpVerb = function(allowNull) {
+        return addContext(this, {
+            fn: isHttpVerb,
+            msg: "one of the http verbs required. Consider using: GET, POST, PUT or DELETE"
+        });
+    };
+	
+	function isHttpVerb(context, v) {
+		if (v.toLowerCase === undefined) return false;
+		var lower = v.toLowerCase();
+		return lower === "get" ||
+			   lower === "post" ||
+			   lower === "put" ||
+			   lower === "delete";
+	}
 
     proto.or = function() {
         this._contexts.push(null);

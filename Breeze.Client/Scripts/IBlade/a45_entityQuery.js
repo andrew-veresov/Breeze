@@ -35,6 +35,7 @@ var EntityQuery = (function () {
         this.parameters = {};
         this.inlineCountEnabled = false;
         this.noTrackingEnabled = false;
+		this.method = "GET";
         // default is to get queryOptions and dataService from the entityManager.
         // this.queryOptions = new QueryOptions();
         // this.dataService = new DataService();
@@ -438,12 +439,18 @@ var EntityQuery = (function () {
         
     @method withParameters
     @param parameters {Object} A parameters object where the keys are the parameter names and the values are the parameter values. 
+    @param method {string} Method type. By default 'GET'. Next are allowed: 'GET', 'POST', 'PUT', 'DELETE'. 
     @return {EntityQuery}
     @chainable
     **/
-    proto.withParameters = function(parameters) {
+    proto.withParameters = function(parameters, method) {
         assertParam(parameters, "parameters").isObject().check();
-        return clone(this, "parameters", parameters);
+        var query = clone(this, "parameters", parameters);
+		if (method != undefined) {
+			assertParam(method, "method").isHttpVerb().check();
+			query = clone(query, "method", method);
+		}
+		return query;
     };
 
     /**

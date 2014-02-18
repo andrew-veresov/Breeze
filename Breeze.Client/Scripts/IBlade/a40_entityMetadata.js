@@ -2384,7 +2384,7 @@ var DataProperty = (function () {
             return rawEntity[dp.nameOnServer || dp.name];
         } else {
             var val = rawEntity[dp.nameOnServer];
-            return val !== undefined ? val : dp.defaultValue;
+            return val !== undefined || rawEntity.$isPartial ? val : dp.defaultValue;
         }
     }
 
