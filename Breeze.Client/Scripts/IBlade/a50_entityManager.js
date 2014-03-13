@@ -1005,6 +1005,30 @@ var EntityManager = (function () {
         }
     };
 
+    proto.updateFrom = function (saveResult) {
+        saveResult = {
+            entities: saveResult.entities || saveResult.Entities,
+            keyMappings: saveResult.keyMappings || saveResult.KeyMappings || []
+        }
+
+        fixupKeys(this, saveResult.keyMappings);
+
+        var mappingContext = new MappingContext({
+            query: null, // tells visitAndMerge that this is a save instead of a query
+            entityManager: this,
+            mergeOptions: { mergeStrategy: MergeStrategy.OverwriteChanges },
+            dataService: DataService.resolve([this.dataService])
+        });
+
+        // Note that the visitAndMerge operation has been optimized so that we do not actually perform a merge if the 
+        // the save operation did not actually return the entity - i.e. during OData and Mongo updates and deletes.
+        var savedEntities = mappingContext.visitAndMerge(saveResult.entities, { nodeType: "root" });
+        // update _hasChanges after save.
+        this.hasChangesChanged.publish({ entityManager: this, hasChanges: false });
+        saveResult.entities = savedEntities;
+        return Q.resolve(saveResult.entities);
+    }
+
     function clearServerErrors(entities) {
         entities.forEach(function (entity) {
             var serverKeys = [];
