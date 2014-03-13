@@ -1,5 +1,5 @@
 /*
- * Copyright 2013 IdeaBlade, Inc.  All Rights Reserved.  
+ * Copyright 2014 IdeaBlade, Inc.  All Rights Reserved.  
  * Use, reproduction, distribution, and modification of this code is subject to the terms and 
  * conditions of the IdeaBlade Breeze license, available at http://www.breezejs.com/license
  *
@@ -9,10 +9,10 @@
 (function (definition) {
 
     // CommonJS
-    if (typeof exports === "object") {
+    if (typeof exports === "object" && typeof module === "object") {
         module.exports = definition();
         // RequireJS
-    } else if (typeof define === "function") {
+    } else if (typeof define === "function" && define["amd"]) {
         define(definition);
         // <script>
     } else {
@@ -8255,7 +8255,7 @@ var DataProperty = (function () {
                 } else {
                     this.defaultValue = this.dataType.defaultValue;
                     if (this.defaultValue == null) {
-                        throw new Error("A nonnullable DataProperty cannot have a null defaultValue. Name: " + this.name);
+                        throw new Error("A nonnullable DataProperty cannot have a null defaultValue. Name: " + (this.name || this.nameOnServer));
                     }
                 }
             }
@@ -9840,7 +9840,7 @@ var EntityQuery = (function () {
         assertParam(entityKey, "entityKey").isInstanceOf(EntityKey).check();
         var q = new EntityQuery(entityKey.entityType.defaultResourceName);
         var pred = buildKeyPredicate(entityKey);
-        q = q.where(pred);
+        q = q.where(pred).toType(entityKey.entityType);
         return q;
     };
 
@@ -9978,7 +9978,6 @@ var EntityQuery = (function () {
         queryOptions["$expand"] = toExpandString();
         queryOptions["$select"] = toSelectString();
         queryOptions["$inlinecount"] = toInlineCountString();
-        //queryOptions = __extend(queryOptions, this.parameters);
             
         var qoText = toQueryOptionsString(queryOptions);
         return this.resourceName + qoText;
@@ -12123,14 +12122,6 @@ var EntityManager = (function () {
     }
 
     /**
-    Calls EntityAspect.rejectChanges on every changed entity in this EntityManager. 
-    @method rejectChanges
-    **/
-    proto.rejectChanges = function () {
-        this.getChanges().forEach(function (entity) { entity.entityAspect.rejectChanges(); })
-    }
-
-    /**
     Exports an entire EntityManager or just selected entities into a serialized string for external storage.
     @example
     This method can be used to take a snapshot of an EntityManager that can be either stored offline or held 
@@ -12707,7 +12698,11 @@ var EntityManager = (function () {
         failureFunction([error])
         @param [errorCallback.error] {Error} Any error that occured wrapped into an Error object.
         @param [errorCallback.error.entityErrors] { Array of server side errors }  These are typically validation errors but are generally any error that can be easily isolated to a single entity. 
-        @param [errorCallback.error.httpResponse] {HttpResponse}The raw HttpResponse returned from the server.
+        @param [errorCallback.error.httpResponse] {HttpResponse} The raw HttpResponse returned from the server.
+        @param [errorCallback.error.saveResult] {Object} Some dataservice adapters return a 'saveResult' object 
+        when the failing save operation is non-transactional meaning some entities could be saved while others were not.
+        The 'saveResult' object identifies both that entities that were saved (with their keyMapping)
+        and that entities that were not saved (with their errors).
         
     @return {Promise} Promise
     **/
@@ -12716,15 +12711,15 @@ var EntityManager = (function () {
         assertParam(saveOptions, "saveOptions").isInstanceOf(SaveOptions).isOptional().check();
         assertParam(callback, "callback").isFunction().isOptional().check();
         assertParam(errorCallback, "errorCallback").isFunction().isOptional().check();
-            
+
         saveOptions = saveOptions || this.saveOptions || SaveOptions.defaultInstance;
         var isFullSave = entities == null;
         var entitiesToSave = getEntitiesToSave(this, entities);
             
         if (entitiesToSave.length === 0) {
-            var saveResult =  { entities: [], keyMappings: [] };
-            if (callback) callback(saveResult);
-            return Q.resolve(saveResult);
+            var result =  { entities: [], keyMappings: [] };
+            if (callback) callback(result);
+            return Q.resolve(result);
         }
             
         if (!saveOptions.allowConcurrentSaves) {
@@ -12753,14 +12748,12 @@ var EntityManager = (function () {
                 return Q.reject(valError);
             }
         }
-            
-        updateConcurrencyProperties(entitiesToSave);
-       
-       
+           
         var dataService = DataService.resolve([saveOptions.dataService, this.dataService]);
         var saveContext = {
             entityManager: this,
             dataService: dataService,
+            processSavedEntities: processSavedEntities,
             resourceName: saveOptions.resourceName || this.saveOptions.resourceName || "SaveChanges"
         };       
 
@@ -12768,38 +12761,61 @@ var EntityManager = (function () {
         // are referenced are also in the partial save group
 
         var saveBundle = { entities: entitiesToSave, saveOptions: saveOptions };
+
         
-        var that = this;
-        return dataService.adapterInstance.saveChanges(saveContext, saveBundle).then(function (saveResult) {
-            
-            fixupKeys(that, saveResult.keyMappings);
-            
-            var mappingContext = new MappingContext( {
-                query: null, // tells visitAndMerge that this is a save instead of a query
-                entityManager: that,
+        try { // Guard against exception thrown in dataservice adapter before it goes async
+            updateConcurrencyProperties(entitiesToSave);
+            return dataService.adapterInstance.saveChanges(saveContext, saveBundle)
+                .then(saveSuccess).then(null, saveFail);
+        } catch (err) {
+            // undo the marking by updateConcurrencyProperties
+            markIsBeingSaved(entitiesToSave, false); 
+            if (errorCallback) errorCallback(err);
+            return Q.reject(err);
+        }
+
+        function saveSuccess(saveResult) {
+            var manager = saveContext.entityManager;
+            var savedEntities = saveResult.entities = saveContext.processSavedEntities(saveResult);
+
+            // update _hasChanges after save.
+            manager._hasChanges = (isFullSave && haveSameContents(entitiesToSave, savedEntities)) ? false : manager._hasChangesCore();
+            if (!manager._hasChanges) {
+                manager.hasChangesChanged.publish({ entityManager: manager, hasChanges: false });
+            }
+
+            markIsBeingSaved(entitiesToSave, false);
+            if (callback) callback(saveResult);
+            return Q.resolve(saveResult);
+        }
+
+        function processSavedEntities(saveResult) {
+            var savedEntities = saveResult.entities;
+            if (savedEntities.length === 0) { return []; }
+            var keyMappings = saveResult.keyMappings;
+            var manager = saveContext.entityManager;
+
+            fixupKeys(manager, keyMappings);
+
+            var mappingContext = new MappingContext({
+                query: null, // tells visitAndMerge this is a save instead of a query
+                entityManager: manager,
                 mergeOptions: { mergeStrategy: MergeStrategy.OverwriteChanges },
                 dataService: dataService
             });
 
-            // Note that the visitAndMerge operation has been optimized so that we do not actually perform a merge if the 
+            // The visitAndMerge operation has been optimized so that we do not actually perform a merge if the 
             // the save operation did not actually return the entity - i.e. during OData and Mongo updates and deletes.
-            var savedEntities = mappingContext.visitAndMerge(saveResult.entities, { nodeType: "root" });
+            savedEntities = mappingContext.visitAndMerge(savedEntities, { nodeType: "root" });
+            return savedEntities;
+        }
+
+        function saveFail(error) {
             markIsBeingSaved(entitiesToSave, false);
-            // update _hasChanges after save.
-            that._hasChanges = (isFullSave && haveSameContents(entitiesToSave, savedEntities)) ? false : that._hasChangesCore();
-            if (!that._hasChanges) {
-                that.hasChangesChanged.publish({ entityManager: that, hasChanges: false });
-            }
-            saveResult.entities = savedEntities;
-            if (callback) callback(saveResult);
-            return Q.resolve(saveResult);
-        }, function (error) {
             processServerErrors(saveContext, error);
-            markIsBeingSaved(entitiesToSave, false);
             if (errorCallback) errorCallback(error);
             return Q.reject(error);
-        });
-
+        }
     };
 
     function clearServerErrors(entities) {
@@ -13154,6 +13170,7 @@ var EntityManager = (function () {
 
     /**
     Rejects (reverses the effects) all of the additions, modifications and deletes from this EntityManager.
+    Calls EntityAspect.rejectChanges on every changed entity in this EntityManager. 
     @example
         // assume em1 is an EntityManager containing a number of preexisting entities.
         var entities = em1.rejectChanges();
@@ -14532,15 +14549,9 @@ breeze.SaveOptions= SaveOptions;
     ctor.prototype.initialize = function () {
         ajaxImpl = breeze.config.getAdapterInstance("ajax");
 
-        if (!ajaxImpl) {
-            throw new Error("Unable to initialize ajax for WebApi.");
-        }
-
-        // don't cache 'ajax' because we then we would need to ".bind" it, and don't want to because of brower support issues. 
-        var ajax = ajaxImpl.ajax;
-        if (!ajax) {
-            throw new Error("Breeze was unable to find an 'ajax' adapter");
-        }
+        // don't cache 'ajax' because then we would need to ".bind" it, and don't want to because of brower support issues. 
+        if (ajaxImpl && ajaxImpl.ajax) { return; }
+        throw new Error("Unable to find ajax adapter for dataservice adapter '"+(this.name||'')+"'.");
     };
 
     ctor.prototype.fetchMetadata = function (metadataStore, dataService) {
@@ -14793,7 +14804,8 @@ breeze.SaveOptions= SaveOptions;
             url: config.url,
             dataType: config.dataType,
             contentType: config.contentType,
-            crossDomain: config.crossDomain
+            crossDomain: config.crossDomain,
+            headers: config.headers || {}
         }
 
         if (config.params) {
@@ -14811,6 +14823,8 @@ breeze.SaveOptions= SaveOptions;
         if (!core.isEmpty(this.defaultSettings)) {
             var compositeConfig = core.extend({}, this.defaultSettings);
             ngConfig = core.extend(compositeConfig, ngConfig);
+            // extend is shallow; extend headers separately
+            ngConfig.headers = core.extend(this.defaultSettings.headers, ngConfig.headers);
         }
 
         httpService(ngConfig).success(function (data, status, headers, xconfig) {
@@ -14908,12 +14922,15 @@ breeze.SaveOptions= SaveOptions;
             data: config.params || config.data,
             dataType: config.dataType,
             contentType: config.contentType,
-            crossDomain: config.crossDomain
+            crossDomain: config.crossDomain,
+            headers: config.headers || {}
         }
         
         if (!core.isEmpty(this.defaultSettings)) {
             var compositeConfig = core.extend({}, this.defaultSettings);
             jqConfig = core.extend(compositeConfig, jqConfig);
+            // extend is shallow; extend headers separately
+            jqConfig.headers = core.extend(this.defaultSettings.headers, jqConfig.headers);
         }
         
         jqConfig.success = function (data, textStatus, XHR) {
@@ -14980,16 +14997,17 @@ breeze.SaveOptions= SaveOptions;
     
     var ctor = function () {
         this.name = "OData";
-
     };
 
-    ctor.prototype.initialize = function () {
+    var fn = ctor.prototype; // minifies better (as seen in jQuery)
+
+    fn.initialize = function () {
         OData = core.requireLib("OData", "Needed to support remote OData services");
         OData.jsonHandler.recognizeDates = true;
     };
     
     
-    ctor.prototype.executeQuery = function (mappingContext) {
+    fn.executeQuery = function (mappingContext) {
     
         var deferred = Q.defer();
         var url = mappingContext.getUrl();
@@ -15014,7 +15032,7 @@ breeze.SaveOptions= SaveOptions;
     };
     
 
-    ctor.prototype.fetchMetadata = function (metadataStore, dataService) {
+    fn.fetchMetadata = function (metadataStore, dataService) {
 
         var deferred = Q.defer();
 
@@ -15062,14 +15080,16 @@ breeze.SaveOptions= SaveOptions;
 
     };
 
-    ctor.prototype.saveChanges = function (saveContext, saveBundle) {
+    fn.getRoutePrefix = function(dataService){ return ''; /* see webApiODataCtor */}
+
+    fn.saveChanges = function (saveContext, saveBundle) {
 
         var deferred = Q.defer();
 
         var helper = saveContext.entityManager.helper;
         var url = saveContext.dataService.makeUrl("$batch");
-        
-        var requestData = createChangeRequests(saveContext, saveBundle);
+        var routePrefix = this.getRoutePrefix(saveContext.dataService);
+        var requestData = createChangeRequests(saveContext, saveBundle, routePrefix);
         var tempKeys = saveContext.tempKeys;
         var contentKeys = saveContext.contentKeys;
         var that = this;
@@ -15120,7 +15140,7 @@ breeze.SaveOptions= SaveOptions;
 
     };
  
-    ctor.prototype.jsonResultsAdapter = new JsonResultsAdapter({
+    fn.jsonResultsAdapter = new JsonResultsAdapter({
         name: "OData_default",
 
         visitNode: function (node, mappingContext, nodeContext) {
@@ -15162,11 +15182,11 @@ breeze.SaveOptions= SaveOptions;
         return val;
     }
 
-    function createChangeRequests(saveContext, saveBundle) {
+    function createChangeRequests(saveContext, saveBundle, routePrefix) {
         var changeRequests = [];
         var tempKeys = [];
         var contentKeys = [];
-        var prefix = saveContext.dataService.serviceName;
+        var baseUri = saveContext.dataService.serviceName;
         var entityManager = saveContext.entityManager;
         var helper = entityManager.helper;
         var id = 0;
@@ -15176,17 +15196,17 @@ breeze.SaveOptions= SaveOptions;
             var request = { headers: { "Content-ID": id, "DataServiceVersion": "2.0" } };
             contentKeys[id] = entity;
             if (aspect.entityState.isAdded()) {
-                request.requestUri = entity.entityType.defaultResourceName;
+                request.requestUri = routePrefix + entity.entityType.defaultResourceName;
                 request.method = "POST";
                 request.data = helper.unwrapInstance(entity, transformValue);
                 tempKeys[id] = aspect.getKey();
             } else if (aspect.entityState.isModified()) {
-                updateDeleteMergeRequest(request, aspect, prefix);
+                updateDeleteMergeRequest(request, aspect, baseUri, routePrefix);
                 request.method = "MERGE";
                 request.data = helper.unwrapChangedValues(entity, entityManager.metadataStore, transformValue);
                 // should be a PATCH/MERGE
             } else if (aspect.entityState.isDeleted()) {
-                updateDeleteMergeRequest(request, aspect, prefix);
+                updateDeleteMergeRequest(request, aspect, baseUri, routePrefix);
                 request.method = "DELETE";
             } else {
                 return;
@@ -15203,11 +15223,11 @@ breeze.SaveOptions= SaveOptions;
 
     }
 
-    function updateDeleteMergeRequest(request, aspect, prefix) {
+    function updateDeleteMergeRequest(request, aspect, baseUri, routePrefix) {
         var extraMetadata = aspect.extraMetadata;
         var uri = extraMetadata.uri || extraMetadata.id;
-        if (core.stringStartsWith(uri, prefix)) {
-            uri = uri.substring(prefix.length);
+        if (core.stringStartsWith(uri, baseUri)) {
+            uri = routePrefix + uri.substring(baseUri.length);
         }
         request.requestUri = uri;
         if (extraMetadata.etag) {
@@ -15259,9 +15279,28 @@ breeze.SaveOptions= SaveOptions;
 
     breeze.config.registerAdapter("dataService", ctor);
 
-}));
 
-;(function(factory) {
+    var webApiODataCtor = function () {
+        this.name = "webApiOData";
+    }
+
+    breeze.core.extend(webApiODataCtor.prototype, fn);
+
+    webApiODataCtor.prototype.getRoutePrefix = function(dataService){
+        // Get the routePrefix from a Web API OData service name.
+        // Web API OData requires inclusion of the routePrefix in the Uri of a batch subrequest
+        // By convention, Breeze developers add the Web API OData routePrefix to the end of the serviceName
+        // e.g. the routePrefix in 'http://localhost:55802/odata/' is 'odata/'
+        var segments = dataService.serviceName.split('/');
+        var last = segments.length-1 ;
+        var routePrefix = segments[last] || segments[last-1];
+        routePrefix = routePrefix ? routePrefix += '/' : '';
+        return routePrefix;
+    };
+
+    breeze.config.registerAdapter("dataService", webApiODataCtor);
+
+}));;(function(factory) {
     if (breeze) {
         factory(breeze);
     } else if (typeof require === "function" && typeof exports === "object" && typeof module === "object") {

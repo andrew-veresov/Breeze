@@ -11,12 +11,12 @@ module.exports = function(grunt) {
            'DocCode',
            'ToDo',
            'ToDo-Angular',
-           'ToDo-AngularWithDI',
            'ToDo-Require',
            'NoDb',
            'CarBones',
            'Edmunds',
            'TempHire',
+           'ODataBreezeJsSample'
         ];
   var sampleSolutionDirs = sampleNames.map(function(sn) {
     return samplesDir + sn + '/';
@@ -119,12 +119,12 @@ module.exports = function(grunt) {
           buildSampleCopy('../', tempDir , 'DocCode', ['**/Todos.sdf']),
           buildSampleCopy('../', tempDir , 'ToDo', ['**/*.sdf']),
           buildSampleCopy('../', tempDir , 'ToDo-Angular', ['**/*.sdf']),
-          buildSampleCopy('../', tempDir , 'ToDo-AngularWithDI', ['**/*.sdf']),
           buildSampleCopy('../', tempDir , 'ToDo-Require', ['**/*.sdf']),
           buildSampleCopy('../', tempDir , 'NoDb'),
           buildSampleCopy('../', tempDir , 'Edmunds'),
           buildSampleCopy('../', tempDir , 'TempHire'),
-          buildSampleCopy('../', tempDir , 'CarBones', ['**/*.mdf', '**/*.ldf'])
+          buildSampleCopy('../', tempDir , 'CarBones', ['**/*.mdf', '**/*.ldf']),
+          buildSampleCopy('../', tempDir , 'ODataBreezeJsSample')
         ]
       },  
     },

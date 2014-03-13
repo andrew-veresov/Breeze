@@ -1,9 +1,17 @@
 ﻿/*
  * Breeze Labs SharePoint 2013 OData DataServiceAdapter
  *
- *  v.0.1.2-pre
+ *  v.0.2.3
  *
  * Registers a SharePoint 2013 OData DataServiceAdapter with Breeze
+ * 
+ * REQUIRES breeze.labs.dataservice.rest.js
+ * 
+ * This adapter cannot get metadata from the server and in general one should
+ * not do so because such metadata cover much more of than you want and are huge (>1MB)
+ * Better to define the metadata "by hand" on the client.
+ * 
+ * W/o need to get metadata, can use AJAX adapter instead of Data.JS.
  *
  * Typical usage in Angular
  *    // configure breeze to use SharePoint OData service
@@ -15,168 +23,167 @@
  *    // provide method returning value for the SP OData 'X-RequestDigest' header
  *    dsAdapter.getRequestDigest = function(){return securityService.requestDigest}
  *
- * This adapter has its own JsonResultsAdapter which you could replace yourself
- * The adapter will look for clientTypeNameToServer and serverTypeNameToClient methods
- * on the JsonResultsAdapter so it can convert SP type names to client EntityType names.
- * If not found, it uses the default versions defined here. 
- * You can create your own type name conversion methods and attach them to the JsonResultsAdapter.
+ * This adapter has its own JsonResultsAdapter which you could replace.
  * 
- * This adapter also memoizes the type names it encounters 
+ * The dataservice adapter looks for clientTypeNameToServer and serverTypeNameToClient methods
+ * on the JsonResultsAdapter during transformation of entity data to/from the server
+ * so it can convert server type names to client EntityType names.
+ * These are initialized to the default versions defined here. 
+ * You can create and attach alternative type name conversion methods to the JsonResultsAdapter
+ * 
+ * This adapter memoizes the type names it encounters 
  * by adding a 'typeMap' object to the JsonResultsAdapter.
+ *
+ * By default this adapter permits multiple entities to be saved at a time,
+ * each in a separate request that this adapter fires off in parallel. 
+ * and waits for all to complete.
+ * 
+ * If 'saveOnlyOne' == true, the adapter throws an exception
+ * when asked to save more than one entity at a time.
  * 
  * Copyright 2014 IdeaBlade, Inc.  All Rights Reserved.
  * Licensed under the MIT License
  * http://opensource.org/licenses/mit-license.php
  * Authors: Ward Bell, Andrew Connell
  */
-(function (factory) {
-    if (breeze) {
-        factory(breeze);
+(function (definition, window) {
+    if (window.breeze) {
+        definition(window.breeze);
     } else if (typeof require === "function" && typeof exports === "object" && typeof module === "object") {
-        // CommonJS or Node: hard-coded dependency on "breeze"
-        factory(require("breeze"));
-    } else if (typeof define === "function" && define["amd"] && !breeze) {
-        // AMD anonymous module with hard-coded dependency on "breeze"
-        define(["breeze"], factory);
+        // CommonJS or Node
+        var b = require('breeze');
+        definition(b);
+    } else if (typeof define === "function" && define["amd"] && !window.breeze) {
+        // Requirejs / AMD 
+        define(['breeze'], definition);
+    } else {
+        throw new Error("Can't find breeze");
     }
-})(function(breeze) {
+}(function (breeze) {
+    "use strict";
 
-    var core = breeze.core;
-    var OData;
-
-    var adapterName = "SharePointOData";
-    var ctor = function() {
-        this.name = adapterName;
+    var ctor = function () {
+        this.name = "SharePointOData";
     };
+    ctor.prototype.initialize = typeInitialize;
 
-    ctor.prototype = {
-        constructor: ctor,
-        executeQuery: executeQuery,
-        fetchMetadata: fetchMetadata,
-        getRequestDigest: undefined, // function that returns value for X-RequestDigest header
-        initialize: initialize,
-        jsonResultsAdapter: createJsonResultsAdapter(),
-        Q: Q, // assume Q.js in global namespace; you better set it if it's not
-        saveChanges: saveChanges
-};
+    function typeInitialize() {
+        // Delay setting the prototype until we're sure AbstractRestDataServiceAdapter is loaded
+        var fn = breeze.AbstractRestDataServiceAdapter.prototype;
+        fn = breeze.core.extend(ctor.prototype, fn);
+        fn.executeQuery = executeQuery;
+        fn._addToSaveContext = _addToSaveContext;
+        fn._createErrorFromResponse = _createErrorFromResponse;
+        fn._createJsonResultsAdapter = _createJsonResultsAdapter;
+        fn._createSaveRequest = _createSaveRequest;
+        fn._getResponseData = _getResponseData;
+        fn._processSavedEntity = _processSavedEntity;
+
+        this.initialize(); // the revised initialize()
+    }
 
     breeze.config.registerAdapter("dataService", ctor);
 
-    /*** Implementation ***/
+    function _addToSaveContext(saveContext) {
+        saveContext.requestDigest = this.getRequestDigest ? this.getRequestDigest() : null;
+    }
 
-    function initialize() {
-        OData = core.requireLib("OData", "Needed to support remote OData services");
-        OData.jsonHandler.recognizeDates = true;
-    };
+    function applyDefaultSelect(mappingContext) {
+        var query = mappingContext.query;
+        var entityType = mappingContext.entityType;
 
-    function defaultClientTypeNameToServer(clientTypeName) {
+        // get the default select if query lacks a select and 
+        // the result type is known and it has a defaultSelect
+        var defaultSelect = !query.selectClause && entityType &&
+            entityType.custom && entityType.custom.defaultSelect;
+        if (defaultSelect) {
+            // revise query with a new query that has the default select
+            mappingContext.query = query.select(defaultSelect);
+        }
+    }
+
+    function clientTypeNameToServerDefault(clientTypeName) {
         return 'SP.Data.' + clientTypeName + 'sListItem';
     }
 
-    function defaultServerTypeNameToClient(serverTypeName) {
-        // strip off leading 'SP.Data.' and trailing 'sListItem'
-        var re = /^(SP\.Data.)(.*)(sListItem)$/;
-        var typeName = serverTypeName.replace(re, '$2');
-        return breeze.MetadataStore.normalizeTypeName(typeName);
-    }
-
-    function createError(error, url) {
+    function _createErrorFromResponse(response, url) {
         // OData errors can have the message buried very deeply - and nonobviously
         // this code is tricky so be careful changing the response.body parsing.
         var result = new Error();
-        var response = error.response;
-        result.message = response.statusText;
+        result.response = response;
+        if (url) { result.url = url; }
+        result.message = response.message || response.error || response.statusText;
         result.statusText = response.statusText;
-        result.status = response.statusCode;
-        // non std
-        if (url) result.url = url;
-        result.body = response.body;
-        if (response.body) {
-            var nextErr;
+        result.status = response.status;
+
+        var data = result.data = response.data;
+        if (data) {
+            var msg = "", nextErr;
             try {
-                var body = JSON.parse(response.body);
-                result.body = body;
-                // OData v3 logic
-                if (body['odata.error']) {
-                    body = body['odata.error'];
+                if (typeof (data) === "string") {
+                    data = result.data = JSON.parse(data);
                 }
-                var msg = "";
                 do {
-                    nextErr = body.error || body.innererror;
-                    if (!nextErr) msg = msg + getMessage(body);
-                    nextErr = nextErr || body.internalexception;
-                    body = nextErr || body;
+                    nextErr = data.error || data.innererror;
+                    if (!nextErr) { msg = msg + getMessage(data); }
+                    nextErr = nextErr || data.internalexception;
+                    data = nextErr;
                 } while (nextErr);
                 if (msg.length > 0) {
                     result.message = msg;
                 }
-            } catch (e) {
-
-            }
+            } catch (e) { /* carry on */ }
         }
         return result;
 
         function getMessage() {
-            var m = body.message || "";
+            var m = data.message || "";
             return ((typeof (m) === "string") ? m : m.value) + "; ";
         }
+
     }
 
-    function createJsonResultsAdapter() {
+    function _createJsonResultsAdapter() {
 
+        var dataServiceAdapter = this;
         var jsonResultsAdapter = new breeze.JsonResultsAdapter({
-            name: adapterName + "_default",
+            name: dataServiceAdapter.name + "_default",
             visitNode: visitNode
         });
+
+        jsonResultsAdapter.clientTypeNameToServer = clientTypeNameToServerDefault;
+        jsonResultsAdapter.serverTypeNameToClient = serverTypeNameToClientDefault;
 
         return jsonResultsAdapter;
 
         function visitNode(node, mappingContext, nodeContext) {
+            var result = { ignore: true };
+            if (!node) { return result; }
 
             var propertyName = nodeContext.propertyName;
-            var ignore = node == null || node.__deferred != null || propertyName === "__metadata" ||
+            var ignore = node.__deferred != null || propertyName === "__metadata" ||
                 // EntityKey properties can be produced by EDMX models
                 (propertyName === "EntityKey" && node.$type && core.stringStartsWith(node.$type, "System.Data"));
-            if (ignore) {
-                return { ignore: true };
-            } else {
-                var result = {};
-            }
-            updateEntityNode(node, mappingContext, result);
 
-            // OData v3 - projection arrays will be enclosed in a results array
-            if (node.results) {
-                result.node = node.results;
-            }
+            if (!ignore) {
+                result = {};
+                updateEntityNode(node, mappingContext, result);
 
+                // OData v3 - projection arrays will be enclosed in a results array
+                if (node.results) {
+                    result.node = node.results;
+                }
+            }
             return result;
-        };
-        
+        }
+
         // Determine if this is an Entity node and update the node appropriately if so
         function updateEntityNode(node, mappingContext, result) {
             var metadata = node.__metadata;
             if (!metadata) { return; }
 
-            var jrAdapter = mappingContext.jsonResultsAdapter;
-            var typeMap = jrAdapter.typeMap;
-            if (!typeMap) { // if missing, make one with a fallback mapping
-                typeMap = { "": { _mappedPropertiesCount: NaN } };
-                jrAdapter.typeMap = typeMap;
-            }
-
-            var rawTypeName = metadata.type;
-            var entityType = typeMap[rawTypeName]; // EntityType for a node with this metadata.type
-
-            if (!entityType && rawTypeName) {
-                // Haven't see this rawTypeName before; add it to the typeMap
-                // Figure out what EntityType this is and remember it
-                
-                var typeName = jrAdapter.serverTypeNameToClient ?
-                    jrAdapter.serverTypeNameToClient(rawTypeName) :
-                    defaultServerTypeNameToClient(rawTypeName);
-                entityType = typeName && mappingContext.metadataStore.getEntityType(typeName, true);
-                typeMap[rawTypeName] = entityType || typeMap[""];
-            }
+            var typeName = dataServiceAdapter._serverTypeNameToClient(mappingContext, metadata.type);
+            var entityType = dataServiceAdapter._getNodeEntityType(mappingContext, typeName);
 
             if (entityType) {
                 // ASSUME if #-of-properties on node is <= #-of-props for the type 
@@ -185,201 +192,152 @@
                 if (entityType._mappedPropertiesCount <= Object.keys(node).length - 1) {
                     result.entityType = entityType;
                     result.extra = node.__metadata;
+
+                    // Delete node properties that look like nested navigation paths
+                    // Breeze gets confused into thinking such properties contain actual entities. 
+                    // Todo: rethink this if/when can include related entities through expand
+                    var navPropNames = entityType.navigationProperties.map(function (p) { return p.name; });
+                    navPropNames.forEach(function (n) { if (node[n]) { delete node[n]; } });
                 }
             }
         }
     }
 
-    function createSaveRequest(saveContext, entity) {
-        var request;
-        if (!entity) { return undefined; } // shouldn't be here
-
-        saveContext.originalEntity = entity;
-
+    function _createSaveRequest(saveContext, entity, index) {
+        var adapter = saveContext.adapter;
+        var data, rawEntity, request;
         var entityManager = saveContext.entityManager;
         var helper = entityManager.helper;
+        var tempKeys = saveContext.tempKeys;
 
         var aspect = entity.entityAspect;
         var state = aspect.entityState;
         var type = entity.entityType;
+        var headers = {
+            'Accept': 'application/json;odata=verbose',
+            'Content-Type': 'application/json;odata=verbose',
+            'DataServiceVersion': '2.0', // or get MIME type error
+            'X-RequestDigest': saveContext.requestDigest
+        };
 
         if (state.isAdded()) {
             var rn = type.defaultResourceName;
             if (!rn) {
-                throw new Error("Missing defaultResourceName for type "+type.name);
+                throw new Error("Missing defaultResourceName for type " + type.name);
             }
+            if (type.autoGeneratedKeyType !== breeze.AutoGeneratedKeyType.None) {
+                tempKeys[index] = aspect.getKey(); // DO NOT PUSH. Gaps expected!
+            }
+
+            rawEntity = helper.unwrapInstance(entity, adapter._transformSaveValue);
+            rawEntity.__metadata = {
+                'type': adapter._clientTypeNameToServer(type.shortName)
+            };
+
+            data = adapter._serializeToJson(rawEntity);
             request = {
                 requestUri: entityManager.dataService.serviceName + rn,
                 method: "POST",
-                headers: {},
-                data: helper.unwrapInstance(entity, transformValue)
-            };
-            request.data['__metadata'] = {
-                 'type': saveContext.clientTypeNameToServer(type.shortName)
-            };
-            saveContext.tempKey = aspect.getKey();
-        } else if (state.isModified()) {
-            var data = helper.unwrapChangedValues(entity, entityManager.metadataStore, transformValue);
-            data.__metadata = { 'type': aspect.extraMetadata.type };
-            request = {
-                method: "POST",
-                headers: { 'X-HTTP-Method': 'MERGE' },
                 data: data
             };
-            tweakUpdateDeleteMergeRequest();
-            // should be a PATCH/MERGE
+
+        } else if (state.isModified()) {
+            rawEntity = helper.unwrapChangedValues(
+                entity, entityManager.metadataStore, adapter._transformSaveValue);
+            rawEntity.__metadata = { 'type': aspect.extraMetadata.type };
+            data = adapter._serializeToJson(rawEntity);
+            headers['X-HTTP-Method'] = 'MERGE';
+            request = {
+                method: "POST",
+                data: data
+            };
+            adjustUpdateDeleteRequest();
+
         } else if (state.isDeleted()) {
             request = {
                 method: "DELETE",
-                headers: {},
                 data: null
             };
-            tweakUpdateDeleteMergeRequest();
+            adjustUpdateDeleteRequest();
         } else {
-            return undefined; // Huh? Detached? How did it get here?
+            throw new Error("Cannot save an entity whose EntityState is " + state.name);
         }
 
-        var headers = request.headers;
-        headers['DataServiceVersion'] = "2.0"; // Why?
-        headers['Accept'] = 'application/json;odata=verbose;';
-        headers['Content-Type'] = 'application/json;odata=verbose;';
+        request.headers = headers;
 
         return request;
 
-        function tweakUpdateDeleteMergeRequest() {
+        function adjustUpdateDeleteRequest() {
             var extraMetadata = aspect.extraMetadata;
             if (!extraMetadata) {
-                throw new Error("Missing the OData metadata for an update/delete entity");
+                throw new Error("Missing the extra metadata for an update/delete entity");
             }
             var uri = extraMetadata.uri || extraMetadata.id;
             request.requestUri = uri;
             if (extraMetadata.etag) {
-                request.headers["If-Match"] = extraMetadata.etag;
+                headers["If-Match"] = extraMetadata.etag;
             }
             return request;
-        }
-
-        function transformValue(prop, val) {
-            if (prop.isUnmapped) return undefined;
-            if (prop.dataType === breeze.DataType.DateTimeOffset) {
-                // The datajs lib tries to treat client dateTimes that are defined as DateTimeOffset on the server differently
-                // from other dateTimes. This fix compensates before the save.
-                val = val && new Date(val.getTime() - (val.getTimezoneOffset() * 60000));
-            } else if (prop.dataType.quoteJsonOData) {
-                val = val != null ? val.toString() : val;
-            }
-            return val;
         }
     }
 
     function executeQuery(mappingContext) {
-
-        var deferred = this.Q.defer();
+        var adapter = this;
+        mappingContext.entityType = adapter._getEntityTypeFromMappingContext(mappingContext);
+        applyDefaultSelect(mappingContext);
+        var deferred = adapter.Q.defer();
         var url = mappingContext.getUrl();
         var headers = {
-            'DataServiceVersion': '2.0', // Why?
             'Accept': 'application/json;odata=verbose',
+            'DataServiceVersion': '2.0', // seems to work w/o this but just in case
         };
 
-        OData.read({
-                requestUri: url,
-                headers: headers
-            },
-            function(data) {
-                var inlineCount = data.__count ? parseInt(data.__count, 10) : undefined;
-                return deferred.resolve({ results: data.results, inlineCount: inlineCount });
-            },
-            function(error) {
-                return deferred.reject(createError(error, url));
+        adapter._ajaxImpl.ajax({
+            type: "GET",
+            url: url,
+            headers: headers,
+            params: mappingContext.query.parameters,
+            success: querySuccess,
+            error: function (response) {
+                deferred.reject(adapter._createErrorFromResponse(response, url));
             }
-        );
+        });
         return deferred.promise;
-    };
 
-    function fetchMetadata() {
-        throw new Error("Cannot process SharePoint metadata; create your own and use that instead");
-    };
-
-    function getClientTypeNameToServer(dataServiceAdapter) {
-        var jrAdapter = dataServiceAdapter.jsonResultsAdapter;
-        return jrAdapter.clientTypeNameToServer ?
-            function(typeName) { return jrAdapter.clientTypeNameToServer(typeName); } :
-            defaultClientTypeNameToServer;
+        function querySuccess(response) {
+            try {
+                var data = response.data;
+                var inlineCount = data.__count ? parseInt(data.__count, 10) : undefined;
+                var rData = {
+                    results: adapter._getResponseData(response).results,
+                    inlineCount: inlineCount,
+                    httpResponse: response
+                };
+                deferred.resolve(rData);
+            } catch (e) {
+                // program error means adapter it broken, not SP or the user
+                deferred.reject(new Error("Program error: failed while parsing successful query response"));
+            }
+        }
     }
 
-    function saveChanges(saveContext, saveBundle) {
-        var error;
-        if (saveBundle.entities.length > 1) {
-            error = new Error("The SharePoint OData data service can only save one entity at a time.");
-            return Q.reject(error);
+    function _getResponseData(response) {
+        return response.data && response.data.d; // sharepoint adds a 'd' !?!
+    }
+
+    function _processSavedEntity(savedEntity, saveContext, response /*, index*/) {
+        var etag = savedEntity && savedEntity.entityAspect && response.getHeaders('ETag');
+        if (etag) {
+            savedEntity.entityAspect.extraMetadata.etag = etag;
         }
-        var entity = saveBundle.entities[0];
+    }
 
-        saveContext.clientTypeNameToServer = getClientTypeNameToServer(this);
+    function serverTypeNameToClientDefault(serverTypeName) {
+        // strip off leading 'SP.Data.' and trailing 'sListItem'
+        var re = /^(SP\.Data.)(.*)(sListItem)$/;
+        var typeName = serverTypeName.replace(re, '$2');
 
-        var request = createSaveRequest(saveContext, entity);
-        if (!request) {
-            error = new Error("Could not compose valid save request.");
-            return Q.reject(error);
-        }
+        return breeze.MetadataStore.normalizeTypeName(typeName);
+    }
 
-        if (this.getRequestDigest) {
-            request.headers['X-RequestDigest'] = this.getRequestDigest();
-        }
-
-        var deferred = this.Q.defer();
-
-        OData.request({
-            requestUri: request.requestUri,
-            method: request.method,
-            headers: request.headers,
-            data: request.data 
-        }, saveSucceeded, saveFailed);
-
-        return deferred.promise;
-
-        function saveSucceeded(data, response) {
-            var statusCode = response.statusCode;
-            if ((!statusCode) || statusCode >= 400) {
-                return deferred.reject(createError(response, url));
-            }
-
-            var entities = [];
-            var keyMappings = [];
-            var saveResult = { entities: entities, keyMappings: keyMappings };
-            var rawEntity = response.data;
-            if (rawEntity) {
-                var tempKey = saveContext.tempKey;
-                if (tempKey) {
-                    var entityType = tempKey.entityType;
-                    if (entityType.autoGeneratedKeyType !== breeze.AutoGeneratedKeyType.None) {
-                        var tempValue = tempKey.values[0];
-                        var realKey = entityType.getEntityKeyFromRawEntity(
-                                rawEntity, breeze.DataProperty.getRawValueFromServer);
-                        var keyMapping = {
-                            entityTypeName: entityType.name,
-                            tempValue: tempValue,
-                            realValue: realKey.values[0]
-                        };
-                        keyMappings.push(keyMapping);
-                    }
-                }
-                entities.push(rawEntity);
-            } else {
-                var saved = saveContext.originalEntity;
-                var etag = response.headers['ETag'];
-                if (etag) {
-                    saved.entityAspect.extraMetadata.etag = etag;
-                }
-                entities.push(saved);
-            }
-
-            return deferred.resolve(saveResult);
-        }
-
-        function saveFailed(err, url) {
-            return deferred.reject(createError(err, url));
-        }
-    };
-
-});
+}, this));

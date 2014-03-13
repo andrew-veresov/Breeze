@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Breeze.Core;
 using System.Collections;
 using System.Runtime.CompilerServices;
+using System.Collections.ObjectModel;
 
 namespace Breeze.NetClient {
   public interface IHasBackingStore {
@@ -24,8 +25,10 @@ namespace Breeze.NetClient {
     public abstract EntityState EntityState { get; set; }
 
     public abstract EntityVersion EntityVersion { get; internal set;  }
+
+    public abstract IEnumerable<ValidationError> GetValidationErrors(String propertyPath);
      
-    protected abstract StructuralType StructuralType { get; }
+    public abstract StructuralType StructuralType { get; }
 
     protected abstract IStructuralObject StructuralObject { get; }
 
@@ -124,13 +127,80 @@ namespace Breeze.NetClient {
 
     #endregion
 
+    #region Validation
+
+    public IEnumerable<ValidationError> Validate() {
+      ValidateInternal();
+      return this.GetValidationErrors(null);
+    }
+
+    public IEnumerable<ValidationError> ValidateProperty(StructuralProperty prop) {
+      var value = this.GetValue(prop);
+      return ValidateProperty(prop, value);
+    }
+
+    protected internal void ValidateInternal() {
+      var vc = new ValidationContext(this.StructuralObject);
+      vc.IsMutable = true;
+
+      // PERF: 
+      // Not using LINQ here because we want to reuse the same
+      // vc property for perf reasons and this
+      // would cause closure issues with a linq expression unless 
+      // we kept resolving with toList.  This is actually simpler code.
+
+      var properties = this.StructuralType.Properties;
+      foreach (var prop in properties) {
+        vc.Property = prop;
+        vc.PropertyValue = this.GetValue(prop);
+
+        var co = vc.PropertyValue as IComplexObject;
+        if (co != null) {
+          co.ComplexAspect.ValidateInternal();
+        }
+        foreach (var vr in prop.Validators) {
+          var ve = ValidateCore(vr, vc);
+        }
+      }
+
+      vc.Property = null;
+      vc.PropertyValue = null;
+      foreach (var vr in this.StructuralType.Validators) {
+        var ve = ValidateCore(vr, vc);
+      }
+
+      
+    }
+
+    // called internally by property set logic
+    internal IEnumerable<ValidationError> ValidateProperty(StructuralProperty prop, Object value) {
+      IEnumerable<ValidationError> errors = null;
+      var co = value as IComplexObject;
+      if (co != null) {
+        errors = co.ComplexAspect.Validate();
+      }
+      var vc = new ValidationContext(this.StructuralObject, prop, value);
+      var itemErrors = prop.Validators.Select(vr => ValidateCore(vr, vc)).Where(ve => ve != null);
+      return errors == null ? itemErrors.ToList() : errors.Concat(itemErrors).ToList();
+    }
+
+    // insures that validation events get fired and _validators collection is updated.
+    protected abstract ValidationError ValidateCore(Validator vr, ValidationContext vc);
+
+    internal virtual String GetPropertyPath(String propName) {
+      return propName;
+    }
+
+    #endregion
+
     #region other misc
 
     protected void RejectChangesCore() {
-      if (this.OriginalValuesMap == null) return;
-      this.OriginalValuesMap.ForEach(kvp => {
-        SetValue(kvp.Key, kvp.Value);
-      });
+      if (_originalValuesMap != null) {
+        _originalValuesMap.ForEach(kvp => {
+          SetValue(kvp.Key, kvp.Value);
+        });
+      }
       this.ProcessComplexProperties(co => co.ComplexAspect.RejectChangesCore());
     }
 
@@ -144,7 +214,6 @@ namespace Breeze.NetClient {
           ((IEnumerable)cos).Cast<IComplexObject>().ForEach(co => action(co));
         }
       });
-
     }
 
     #endregion
@@ -174,7 +243,7 @@ namespace Breeze.NetClient {
         var co = (IComplexObject)GetValue(property, EntityVersion.Current);
         return co.ComplexAspect.GetOriginalVersion();
       } else {
-        if (OriginalValuesMap != null && OriginalValuesMap.TryGetValue(property.Name, out result)) {
+        if (_originalValuesMap != null && _originalValuesMap.TryGetValue(property.Name, out result)) {
           return result;
         } else {
           return GetValue(property);
@@ -184,7 +253,7 @@ namespace Breeze.NetClient {
 
     protected Object GetPreproposedValue(DataProperty property) {
       object result;
-      if (PreproposedValuesMap != null && PreproposedValuesMap.TryGetValue(property.Name, out result)) {
+      if (_preproposedValuesMap != null && _preproposedValuesMap.TryGetValue(property.Name, out result)) {
         return result;
       } else {
         return GetValue(property);
@@ -192,56 +261,41 @@ namespace Breeze.NetClient {
     }
 
     protected internal virtual void ClearBackupVersion(EntityVersion version) {
-
-      if (version == EntityVersion.Original) {
-        if (OriginalValuesMap != null) {
-          ClearComplexBackupVersions(version);
-          OriginalValuesMap = null;
-        }
-      } else if (version == EntityVersion.Proposed) {
-        if (PreproposedValuesMap != null) {
-          ClearComplexBackupVersions(version);
-          PreproposedValuesMap = null;
-        }
-      }
+      // don't need return value;
+      GetBackupMap(version, true);
+      ProcessComplexProperties((co) => co.ComplexAspect.ClearBackupVersion(version));
     }
 
-    private void ClearComplexBackupVersions(EntityVersion version) {
-      this.StructuralType.DataProperties.Where(dp => dp.IsComplexProperty).ForEach(dp => {
-        var co = GetValue<IComplexObject>(dp);
-        co.ComplexAspect.ClearBackupVersion(version);
-      });
-    }
-
-    protected internal virtual void RestoreBackupVersion(EntityVersion version) {
-      if (version == EntityVersion.Original) {
-        if (OriginalValuesMap != null) {
-          RestoreOriginalValues(OriginalValuesMap, version);
-          OriginalValuesMap = null;
-        }
-      } else if (version == EntityVersion.Proposed) {
-        if (PreproposedValuesMap != null) {
-          RestoreOriginalValues(PreproposedValuesMap, version);
-          PreproposedValuesMap = null;
-        }
-      }
-    }
-
-    internal virtual void RestoreOriginalValues(BackupValuesMap backupMap, EntityVersion version) {
-      backupMap.ForEach(kvp => {
-        var value = kvp.Value;
-        if (value is IComplexObject) {
-          ((IComplexObject)value).ComplexAspect.RestoreBackupVersion(version);
-        }
-        var dp = this.StructuralType.GetDataProperty(kvp.Key);
-
-        if (GetValue(dp) != value) {
+    
+    protected internal virtual void RestoreBackupVersion( EntityVersion version) {
+      var backupMap = GetBackupMap(version, true);
+      if (backupMap != null) {
+        backupMap.ForEach(kvp => {
+          var value = kvp.Value;
+          var dp = this.StructuralType.GetDataProperty(kvp.Key);
+          if (GetValue(dp) != value) {
             SetDpValue(dp, value);
             OnDataPropertyRestore(dp);
-        }
-      });
+          }
+        });
+      }
+      ProcessComplexProperties((co) => co.ComplexAspect.RestoreBackupVersion(version));
     }
-    
+
+    private BackupValuesMap GetBackupMap(EntityVersion version, bool shouldClear) {
+      BackupValuesMap result;
+      if (version == EntityVersion.Original) {
+        result = _originalValuesMap;
+        if (shouldClear) _originalValuesMap = null;
+      } else if (version == EntityVersion.Proposed) {
+        result = _preproposedValuesMap;
+        if (shouldClear) _preproposedValuesMap = null;
+      } else {
+        throw new Exception("GetBackupMap is not implemented for " + version.ToString());
+      }
+      return result;
+    }
+
     internal virtual void OnDataPropertyRestore(DataProperty dp) {
       // deliberate noop here;
     }
@@ -249,33 +303,38 @@ namespace Breeze.NetClient {
 
 
     private void BackupOriginalValueIfNeeded(DataProperty property, Object oldValue) {
-      if (OriginalValuesMap == null) {
-        OriginalValuesMap = new OriginalValuesMap();
+      if (_originalValuesMap == null) {
+        _originalValuesMap = new BackupValuesMap();
+      } else {
+        if (_originalValuesMap.ContainsKey(property.Name)) return;
       }
-
-      if (OriginalValuesMap.ContainsKey(property.Name)) return;
       // reference copy of complex object is deliberate - actual original values will be stored in the co itself.
-      OriginalValuesMap.Add(property.Name, oldValue);
+      _originalValuesMap.Add(property.Name, oldValue);
     }
 
     private void BackupProposedValueIfNeeded(DataProperty property, Object oldValue) {
-      if (PreproposedValuesMap == null) {
-        PreproposedValuesMap = new BackupValuesMap();
+      if (_preproposedValuesMap == null) {
+        _preproposedValuesMap = new BackupValuesMap();
+      } else {
+        if (_preproposedValuesMap.ContainsKey(property.Name)) return;
       }
-
-      if (PreproposedValuesMap.ContainsKey(property.Name)) return;
-      PreproposedValuesMap.Add(property.Name, oldValue);
+      _preproposedValuesMap.Add(property.Name, oldValue);
     }
 
-    protected internal OriginalValuesMap OriginalValuesMap {
-      get;
-      set;
+    public ReadOnlyDictionary<String, Object> OriginalValuesMap {
+      get { return HandleNull(_originalValuesMap); }
     }
 
-    protected internal BackupValuesMap PreproposedValuesMap {
-      get;
-      set;
+    public ReadOnlyDictionary<String, Object> PreproposedValuesMap {
+      get { return HandleNull(_preproposedValuesMap); }
     }
+
+    private ReadOnlyDictionary<String, Object> HandleNull(BackupValuesMap map) {
+      return (map ?? BackupValuesMap.Empty).ReadOnlyDictionary;
+    }
+    
+    internal BackupValuesMap _originalValuesMap;
+    internal BackupValuesMap _preproposedValuesMap;
 
 
     #endregion

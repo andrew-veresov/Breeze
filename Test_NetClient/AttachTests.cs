@@ -18,7 +18,7 @@ namespace Test_NetClient {
 
     private Task<EntityManager> _emTask = null;
     private EntityManager _em1;
-    private static MetadataStore __metadataStore;
+    
 
     [TestInitialize]
     public void TestInitializeMethod() {
@@ -28,10 +28,9 @@ namespace Test_NetClient {
     public async Task<EntityManager> SetUpAsync() {
       var serviceName = "http://localhost:7150/breeze/NorthwindIBModel/";
       
-      if (__metadataStore == null) {
+      if ( MetadataStore.Instance.EntityTypes.Count == 0) {
         _em1 = new EntityManager(serviceName);
         await _em1.FetchMetadata();
-        __metadataStore = _em1.MetadataStore;
       } else {
         _em1 = new EntityManager(serviceName);
       }
@@ -57,6 +56,75 @@ namespace Test_NetClient {
       
       Assert.IsTrue(prod1.Discontinued == true, "should have returned to initial state");
     }
+
+    [TestMethod]
+    public async Task RejectChangesFkFixup() {
+      await _emTask;
+
+      var emp1 = new Employee();
+      _em1.AttachEntity(emp1);
+      var emp2 = _em1.CreateEntity<Employee>();
+      
+      var order1 = new Order();
+      emp1.Orders.Add(order1);
+      Assert.IsTrue(order1.EntityAspect.EntityState.IsAdded());
+      Assert.IsTrue(order1.Employee == emp1);
+      order1.EntityAspect.AcceptChanges();
+      // move the order;
+      emp2.Orders.Add(order1);
+      Assert.IsTrue(emp1.Orders.Count == 0);
+      Assert.IsTrue(emp2.Orders.Count == 1);
+      Assert.IsTrue(order1.Employee == emp2);
+      Assert.IsTrue(order1.EntityAspect.EntityState.IsModified());
+      order1.EntityAspect.RejectChanges();
+      Assert.IsTrue(order1.Employee == emp1);
+      Assert.IsTrue(emp1.Orders.Count == 1);
+      Assert.IsTrue(emp2.Orders.Count == 0);
+    }
+
+    [TestMethod]
+    public async Task RejectChangesValidationFixup() {
+      await _emTask;
+
+      var cust1 = new Customer();
+      _em1.AttachEntity(cust1);
+      Assert.IsTrue(cust1.EntityAspect.ValidationErrors.Count == 1);
+      cust1.CompanyName = "valid name";
+      Assert.IsTrue(cust1.EntityAspect.ValidationErrors.Count == 0);
+      cust1.EntityAspect.RejectChanges();
+      Assert.IsTrue(cust1.EntityAspect.ValidationErrors.Count == 1);
+    }
+
+
+    [TestMethod]
+    public async Task NullForeignKey() {
+      await _emTask;
+      var prod1 = new Product();
+      
+      _em1.AttachEntity(prod1);
+      prod1.ProductName = "Test";
+      prod1.SupplierID = null;
+
+      var q0 = new EntityQuery<Product>().Where(p => p.Supplier != null).Take(2).Expand(p => p.Supplier);
+      var r0 = (await q0.Execute(_em1)).ToList();
+      Assert.IsTrue(r0.Count() == 2);
+      Assert.IsTrue(r0.All(p => p.Supplier != null));
+      var p0 = r0[0];
+      var p1 = r0[1];
+      var s0 = p0.Supplier;
+      var s1 = p1.Supplier;
+
+      Assert.IsTrue(s0.Products.Contains(p0));
+      p0.Supplier = null;
+      Assert.IsTrue(p0.SupplierID == null);
+      Assert.IsTrue(!s0.Products.Contains(p0));
+      
+      Assert.IsTrue(s1.Products.Contains(p1));
+      p1.SupplierID = null;
+      Assert.IsTrue(p1.Supplier == null);
+      Assert.IsTrue(!s1.Products.Contains(p1));
+    }
+   
 
     [TestMethod]
     public async Task CreateEntity() {
@@ -324,6 +392,67 @@ namespace Test_NetClient {
       _em1.AttachEntity(order);
       Assert.IsTrue(order.EntityAspect.IsAttached && order.EntityAspect.EntityState.IsUnchanged());
     }
+
+    // attach, detach and reattach
+    [TestMethod]
+    public async Task AttachDetachReattachNavProps() {
+      await _emTask;
+
+      var cust1 = new Customer() {  CustomerID = Guid.NewGuid() };
+      _em1.AttachEntity(cust1);
+      var cust2 = new Customer() {  CustomerID =  Guid.NewGuid() };
+      _em1.AttachEntity(cust2); 
+      var order = _em1.CreateEntity<Order>(EntityState.Unchanged);
+      Assert.IsTrue(order.EntityAspect.IsAttached && order.EntityAspect.EntityState.IsUnchanged());
+      cust1.Orders.Add(order);
+      Assert.IsTrue(order.Customer == cust1);
+      Assert.IsTrue(order.EntityAspect.IsAttached && order.EntityAspect.EntityState.IsModified());
+      _em1.DetachEntity(order);
+      Assert.IsTrue(order.EntityAspect.IsDetached);
+      Assert.IsTrue(order.Customer == null);
+      _em1.AttachEntity(order);
+      Assert.IsTrue(order.Customer == cust1);
+      Assert.IsTrue(order.EntityAspect.IsAttached && order.EntityAspect.EntityState.IsUnchanged());
+
+    }
+
+    // attach, detach and reattach
+    [TestMethod]
+    public async Task AttachDetachOriginalValues() {
+      await _emTask;
+
+      var cust1 = new Customer() { CustomerID = Guid.NewGuid() };
+      _em1.AttachEntity(cust1);
+      cust1.ContactName = "original contact name";
+      cust1.EntityAspect.AcceptChanges();
+      Assert.IsTrue(cust1.EntityAspect.IsAttached && cust1.EntityAspect.EntityState.IsUnchanged());
+
+      cust1.ContactName = "new contact name";
+      Assert.IsTrue(cust1.EntityAspect.IsAttached && cust1.EntityAspect.EntityState.IsModified());
+      _em1.DetachEntity(cust1);
+      Assert.IsTrue(cust1.EntityAspect.IsDetached);
+      Assert.IsTrue(cust1.ContactName == "new contact name");
+      _em1.AttachEntity(cust1, EntityState.Modified);
+      Assert.IsTrue(cust1.ContactName == "new contact name");
+      Assert.IsTrue(cust1.EntityAspect.IsAttached && cust1.EntityAspect.EntityState.IsModified());
+      cust1.EntityAspect.RejectChanges();
+      Assert.IsTrue(cust1.EntityAspect.IsAttached && cust1.EntityAspect.EntityState.IsUnchanged());
+      Assert.IsTrue(cust1.ContactName == "original contact name");
+
+      cust1.ContactName = "new foo";
+      Assert.IsTrue(cust1.EntityAspect.IsAttached && cust1.EntityAspect.EntityState.IsModified());
+      _em1.DetachEntity(cust1);
+      Assert.IsTrue(cust1.EntityAspect.IsDetached);
+      Assert.IsTrue(cust1.ContactName == "new foo");
+      
+      _em1.AttachEntity(cust1);
+      Assert.IsTrue(cust1.ContactName == "new foo");
+      Assert.IsTrue(cust1.EntityAspect.IsAttached && cust1.EntityAspect.EntityState.IsUnchanged());
+      Assert.IsTrue(cust1.EntityAspect.OriginalValuesMap.Count == 0);
+      cust1.EntityAspect.RejectChanges();
+      Assert.IsTrue(cust1.ContactName == "new foo");
+      Assert.IsTrue(cust1.EntityAspect.IsAttached && cust1.EntityAspect.EntityState.IsUnchanged());
+    }
     
     // exception if set nav to entity with different manager
     [TestMethod]
@@ -564,16 +693,20 @@ namespace Test_NetClient {
       ((INotifyPropertyChanged)order1).PropertyChanged += (s, e) => {
         propChangedList.Add(e);
       };
+      var entityChangedList = new List<EntityChangedEventArgs>();
+      _em1.EntityChanged += (s, e) => {
+        entityChangedList.Add(e);
+      };
       order1.EntityAspect.Detach();
+      
       Assert.IsTrue(collectionChangedList.Last().Action == NotifyCollectionChangedAction.Remove);
       Assert.IsTrue(collectionChangedList.Last().OldItems.Contains(order1), "change event should contain order1");
-      
-      
+
       Assert.IsTrue(propChangedList.Count == 0, "Detaching an entity will not create a propertyChange event");
 
       Assert.IsTrue(!orders.Contains(order1), "order1 should have been removed");
       Assert.IsTrue(order1.Customer == null, "Customer should be null");
-      Assert.IsTrue(order1.CustomerID == null); // null because not required.
+      Assert.IsTrue(order1.CustomerID == cust1.CustomerID, "customerID should NOT be cleared when detached - just the Customer");
       Assert.IsTrue(order1.EntityAspect.EntityState.IsDetached());
       Assert.IsTrue(orders.Count == 1, "count should be 1");
 
@@ -582,12 +715,13 @@ namespace Test_NetClient {
       order1.Customer = cust1;
       Assert.IsTrue(collectionChangedList.Last().Action == NotifyCollectionChangedAction.Add);
       Assert.IsTrue(collectionChangedList.Last().NewItems.Contains(order1), "change event should contain order1");
-      // Assert.IsTrue(propChangedList.Any(args => args.PropertyName == "Customer"), "propChange should mention Customer");
-      Assert.IsTrue(propChangedList.Any(args => args.PropertyName == "CustomerID"), "propChange should mention CustomerID");
+      Assert.IsTrue(propChangedList.Any(args => args.PropertyName == "Customer"), "propChange should mention Customer");
+      // Not needed because CustomerID is not cleared.
+      // Assert.IsTrue(propChangedList.Any(args => args.PropertyName == "CustomerID"), "propChange should mention CustomerID");
 
       Assert.IsTrue(orders.Contains(order1), "order1 should be back");
       Assert.IsTrue(order1.Customer == cust1, "Customer should be back");
-      Assert.IsTrue(order1.CustomerID == cust1.CustomerID, "CustomerID should be back"); // null because not required.
+      Assert.IsTrue(order1.CustomerID == cust1.CustomerID, "CustomerID should not have changed"); // null because not required.
       Assert.IsTrue(order1.EntityAspect.EntityState.IsAdded());
       Assert.IsTrue(orders.Count == 2, "count should be 2");
 
@@ -813,7 +947,7 @@ namespace Test_NetClient {
 
       emp2.Manager = emp1;
       emp3.Manager = emp2;
-      _em1.AttachEntity(emp3);
+      _em1.AddEntity(emp3);
       Assert.IsTrue(emp3.EntityAspect.IsAttached);
       Assert.IsTrue(emp2.EntityAspect.IsAttached);
       Assert.IsTrue(emp1.EntityAspect.IsAttached);

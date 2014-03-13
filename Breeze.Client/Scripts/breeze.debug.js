@@ -21,12 +21,13 @@
 
 })(function () {  
     var breeze = {
-        version: "1.4.8",
+        version: "1.4.11",
         metadataVersion: "1.0.5"
     };
 
 
-    ;/**
+    
+/**
  @module core
  **/
 
@@ -605,7 +606,7 @@ core.parent = breeze;
 breeze.core = core;
 
 
-;/**
+/**
  @module core
  **/
 
@@ -803,6 +804,22 @@ var Param = (function () {
         }
         return msg;
     }
+	
+	proto.isHttpVerb = function(allowNull) {
+        return addContext(this, {
+            fn: isHttpVerb,
+            msg: "one of the http verbs required. Consider using: GET, POST, PUT or DELETE"
+        });
+    };
+	
+	function isHttpVerb(context, v) {
+		if (v.toLowerCase === undefined) return false;
+		var lower = v.toLowerCase();
+		return lower === "get" ||
+			   lower === "post" ||
+			   lower === "put" ||
+			   lower === "delete";
+	}
 
     proto.or = function() {
         this._contexts.push(null);
@@ -841,7 +858,7 @@ var Param = (function () {
                 curContext.prevContext = context;
                 // just update the prevContext but don't change the curContext.
                 return that;
-            } else if (context.prevContext === null) {
+            } else if (context.prevContext == null) {
                 context.prevContext = that._context;
             } else {
                 throw new Error("Illegal construction - use 'or' to combine checks");
@@ -967,7 +984,7 @@ core.assertConfig = assertConfig;
 
 
 
-;/**
+/**
  @module core
  **/
 
@@ -1241,7 +1258,7 @@ var Enum = (function() {
 core.Enum = Enum;
 
 
-;/**
+/**
 @module core
 **/
 
@@ -1526,7 +1543,8 @@ var Event = (function() {
 
 })();
 
-core.Event = Event;;/**
+core.Event = Event;
+/**
 @module breeze   
 **/
 
@@ -1805,7 +1823,8 @@ var __modelLibraryDef = __config.interfaceRegistry.modelLibrary;
 // legacy
 core.config = __config;
 
-breeze.config = __config;;
+breeze.config = __config;
+
 var observableArray = (function() {
 
     var mixin = {};
@@ -1963,7 +1982,8 @@ var observableArray = (function() {
 
 
 
-})();;/**
+})();
+/**
 @module breeze
 **/
 
@@ -2454,7 +2474,7 @@ var Validator = (function () {
         var valFn = function (v, ctx) {
             if (v == null) return true;
             if (typeof v === "string" && ctx && ctx.allowString) {
-                v = parseInt(v, 10);
+                v = parseFloat(v, 10);
             }
             return (typeof v === "number" && !isNaN(v));
         };
@@ -2933,7 +2953,7 @@ var ValidationError = (function () {
 breeze.Validator = Validator;
 breeze.ValidationError = ValidationError;
  
-;/**
+/**
 @module breeze
 **/
    
@@ -3060,7 +3080,7 @@ breeze.ValidationOptions = ValidationOptions;
 
 
 
-;
+
 breeze.makeComplexArray = (function() {
     var complexArrayMixin = {};
 
@@ -3188,7 +3208,8 @@ breeze.makeComplexArray = (function() {
     }
 
     return makeComplexArray;
-})();;/**
+})();
+/**
 @module breeze   
 **/
 
@@ -3237,7 +3258,7 @@ var EntityAction = (function () {
         
         
     /**
-    AttachOnQuery - Entity was detached.
+    Detach - Entity was detached.
 
     @property Detach {EntityAction}
     @final
@@ -3264,9 +3285,9 @@ var EntityAction = (function () {
     EntityAction.MergeOnImport = EntityAction.addSymbol( { isModification: true });
         
     /**
-    MergeOnImport - Properties on the entity were merged as a result of a save
+    MergeOnSave - Properties on the entity were merged as a result of a save
 
-    @property MergeOnImport {EntityAction}
+    @property MergeOnSave {EntityAction}
     @final
     @static
     **/
@@ -3324,7 +3345,7 @@ var EntityAction = (function () {
 
 breeze.EntityAction= EntityAction;
 
-;/**
+/**
 @module breeze   
 **/
 
@@ -3845,7 +3866,7 @@ var EntityAspect = (function() {
         if (property) {
             var propertyName = typeof (property) === 'string' ? property : property.name;
             result = result.filter(function (ve) {
-                return (ve.property && ve.property.name === propertyName);
+                return ve.property && (ve.property.name === propertyName || (propertyName.indexOf(".") != -1 && ve.propertyName == propertyName));
             });
         }
         return result;
@@ -3953,6 +3974,20 @@ var EntityAspect = (function() {
                 ok = validate(that, validator, value, context) && ok;
             });
         });
+
+        var stype = context.entity.entityType;
+        var entity = context.entity;
+        var entityAspect = context.entity.entityAspect;
+
+        // then entity level
+        this._processValidationOpAndPublish(function(that) {
+            stype.validators.forEach(function (validator) {
+                if (validator.context.displayName == context.propertyName) {
+                    ok = validate(entityAspect, validator, entity) && ok;
+                }
+            });
+        })
+
         return ok;
     };
 
@@ -4206,7 +4241,7 @@ var ComplexAspect = (function() {
 
 breeze.EntityAspect= EntityAspect;
 breeze.ComplexAspect= ComplexAspect;
-;/**
+/**
 @module breeze   
 **/
     
@@ -4359,7 +4394,7 @@ var EntityKey = (function () {
 })();
 
 breeze.EntityKey = EntityKey;
-;/**
+/**
 @module breeze   
 **/
 
@@ -4502,7 +4537,7 @@ var EntityState = (function () {
 })();
    
 breeze.EntityState= EntityState;
-;
+
 breeze.makePrimitiveArray = (function() {
     var primitiveArrayMixin = {};
 
@@ -4586,7 +4621,8 @@ breeze.makePrimitiveArray = (function() {
     }
 
     return makePrimitiveArray;
-})();;
+})();
+
 breeze.makeRelationArray = (function() {
 
     var relationArrayMixin = {};
@@ -4765,7 +4801,8 @@ breeze.makeRelationArray = (function() {
     }
 
     return makeRelationArray;
-})();;
+})();
+
 function defaultPropertyInterceptor(property, newValue, rawAccessorFn) {
     // 'this' is the entity itself in this context.
 
@@ -4778,6 +4815,16 @@ function defaultPropertyInterceptor(property, newValue, rawAccessorFn) {
         if (Array.isArray(newValue) && !property.isScalar) {
             newValue = newValue.map(function(nv) { return dataType.parse(nv, typeof nv); });
         } else {
+            // angular keystroke hack
+            // test if string ends with "." or ".0" or ".00" - or ".030" or ".0300" etc.
+            if (dataType.isFloat && (typeof newValue == "string") && /[.](\d*0|)$/.test(newValue)) {
+                rawAccessorFn(newValue);
+                setTimeout(function () {
+                    newValue = dataType.parse(newValue, typeof newValue);
+                    defaultPropertyInterceptor(property, newValue, rawAccessorFn);
+                }, 0);
+                return;
+            }
             newValue = dataType.parse(newValue, typeof newValue);
         }
     }
@@ -4985,6 +5032,9 @@ function defaultPropertyInterceptor(property, newValue, rawAccessorFn) {
                 // propogate pk change to all related entities;
 
                 var propertyIx = this.entityType.keyProperties.indexOf(property);
+                // this part handles order.orderId => orderDetail.orderId
+                // but won't handle product.productId => orderDetail.productId because product
+                // doesn't have an orderDetails property.
                 this.entityType.navigationProperties.forEach(function (np) {
                     var inverseNp = np.inverse;
                     var fkNames = inverseNp ? inverseNp.foreignKeyNames : np.invForeignKeyNames;
@@ -5001,6 +5051,17 @@ function defaultPropertyInterceptor(property, newValue, rawAccessorFn) {
                         });
                     }
                 });
+                // this handles unidirectional problems not covered above.
+                if (entityManager) {
+                    this.entityType.inverseForeignKeyProperties.forEach(function (invFkProp) {
+                        if (invFkProp.relatedNavigationProperty.inverse == null) {
+                            // this next step may be slow - it iterates over all of the entities in a group;
+                            // hopefully it doesn't happen often.
+                            entityManager._updateFkVal(invFkProp, oldValue, newValue);
+                        };
+                    });
+                }
+                
                 // insure that cached key is updated.
                 entityAspect.getKey(true);
             }
@@ -5151,7 +5212,8 @@ function defaultPropertyInterceptor(property, newValue, rawAccessorFn) {
         inProcess.pop();
     }
 }
-    ;/**
+    
+/**
   @module breeze
   **/
 
@@ -5391,7 +5453,7 @@ var DataType = (function () {
     @static
     **/
     DataType.Decimal = DataType.addSymbol({
-        defaultValue: 0, isNumeric: true, quoteJsonOData: true,
+        defaultValue: 0, isNumeric: true, quoteJsonOData: true, isFloat: true,
         parse: coerceToFloat,
         fmtOData: makeFloatFmt("m"),
         getNext: getNextNumber
@@ -5402,7 +5464,7 @@ var DataType = (function () {
     @static
     **/
     DataType.Double = DataType.addSymbol({
-        defaultValue: 0, isNumeric: true,
+        defaultValue: 0, isNumeric: true, isFloat: true,
         parse: coerceToFloat,
         fmtOData: makeFloatFmt("d"),
         getNext: getNextNumber
@@ -5413,7 +5475,7 @@ var DataType = (function () {
     @static
     **/
     DataType.Single = DataType.addSymbol({
-        defaultValue: 0, isNumeric: true,
+        defaultValue: 0, isNumeric: true, isFloat: true,
         parse: coerceToFloat,
         fmtOData: makeFloatFmt("f"),
         getNext: getNextNumber
@@ -5626,7 +5688,7 @@ var DataType = (function () {
 
 breeze.DataType = DataType;
 
-;/**
+/**
 @module breeze
 **/
 
@@ -5887,7 +5949,7 @@ breeze.DataService= DataService;
 breeze.JsonResultsAdapter = JsonResultsAdapter;
 
 
-;/**
+/**
 @module breeze
 **/
 
@@ -7098,6 +7160,7 @@ var EntityType = (function () {
         this.complexProperties = [];
         this.keyProperties = [];
         this.foreignKeyProperties = [];
+        this.inverseForeignKeyProperties = [];
         this.concurrencyProperties = [];
         this.unmappedProperties = []; // will be updated later.
         this.validators = [];
@@ -7915,6 +7978,8 @@ var EntityType = (function () {
         fkProps.forEach(function (dp) {
             addUniqueItem(fkPropCollection, dp);
             dp.relatedNavigationProperty = np;
+            // now update the inverse
+            np.entityType.inverseForeignKeyProperties.push(dp);
             if (np.relatedDataProperties) {
                 np.relatedDataProperties.push(dp);
             } else {
@@ -8255,7 +8320,7 @@ var DataProperty = (function () {
                 } else {
                     this.defaultValue = this.dataType.defaultValue;
                     if (this.defaultValue == null) {
-                        throw new Error("A nonnullable DataProperty cannot have a null defaultValue. Name: " + this.name);
+                        throw new Error("A non nullable DataProperty cannot have a null defaultValue. Name: " + (this.name || this.nameOnServer));
                     }
                 }
             }
@@ -8273,7 +8338,7 @@ var DataProperty = (function () {
             return rawEntity[dp.nameOnServer || dp.name];
         } else {
             var val = rawEntity[dp.nameOnServer];
-            return val !== undefined ? val : dp.defaultValue;
+            return val !== undefined || rawEntity.$isPartial ? val : dp.defaultValue;
         }
     }
 
@@ -8791,7 +8856,7 @@ breeze.AutoGeneratedKeyType = AutoGeneratedKeyType;
 MetadataStore.normalizeTypeName = CsdlMetadataParser.normalizeTypeName;
 
 
-;/**
+/**
  @module breeze
  **/
 
@@ -8911,7 +8976,8 @@ var KeyGenerator = (function () {
     return ctor;
 })();
 
-breeze.KeyGenerator = KeyGenerator;;/**
+breeze.KeyGenerator = KeyGenerator;
+/**
 @module breeze
 **/
 
@@ -9008,7 +9074,7 @@ var LocalQueryComparisonOptions = (function () {
 breeze.LocalQueryComparisonOptions = LocalQueryComparisonOptions;
 
 
-;/**
+/**
 @module breeze
 **/
     
@@ -9139,7 +9205,7 @@ var NamingConvention = (function () {
 breeze.NamingConvention = NamingConvention;
 
 
-;    
+    
 var EntityQuery = (function () {
     /**
     An EntityQuery instance is used to query entities either from a remote datasource or from a local {{#crossLink "EntityManager"}}{{/crossLink}}. 
@@ -9176,6 +9242,7 @@ var EntityQuery = (function () {
         this.parameters = {};
         this.inlineCountEnabled = false;
         this.noTrackingEnabled = false;
+		this.method = "GET";
         // default is to get queryOptions and dataService from the entityManager.
         // this.queryOptions = new QueryOptions();
         // this.dataService = new DataService();
@@ -9579,12 +9646,18 @@ var EntityQuery = (function () {
         
     @method withParameters
     @param parameters {Object} A parameters object where the keys are the parameter names and the values are the parameter values. 
+    @param method {string} Method type. By default 'GET'. Next are allowed: 'GET', 'POST', 'PUT', 'DELETE'. 
     @return {EntityQuery}
     @chainable
     **/
-    proto.withParameters = function(parameters) {
+    proto.withParameters = function(parameters, method) {
         assertParam(parameters, "parameters").isObject().check();
-        return clone(this, "parameters", parameters);
+        var query = clone(this, "parameters", parameters);
+		if (method != undefined) {
+			assertParam(method, "method").isHttpVerb().check();
+			query = clone(query, "method", method);
+		}
+		return query;
     };
 
     /**
@@ -9630,6 +9703,27 @@ var EntityQuery = (function () {
         assertParam(enabled, "enabled").isBoolean().isOptional().check();
         enabled = (enabled === undefined) ? true : !!enabled;
         return clone(this, "noTrackingEnabled", enabled);
+    };
+	
+
+    /**
+    Returns a query with the 'asType' capability either enabled or disabled.  With 'asType' enabled, the results of this query
+    will be interpreted as entity or part of entity of provided type.
+	The 'asType' capability allows partial updates of the entities.
+
+    @example
+        var query = new EntityQuery("Customers")
+            .select("Id,Name")
+            .asType("Customer");
+   
+
+    @method asType
+    @param typeName {String} Type name to treat results as. 
+    @return {EntityQuery}
+    @chainable
+    **/
+    proto.asType = function (typeName) {
+        return clone(this, "asTypeName", typeName);
     };
     
     /**
@@ -9840,7 +9934,7 @@ var EntityQuery = (function () {
         assertParam(entityKey, "entityKey").isInstanceOf(EntityKey).check();
         var q = new EntityQuery(entityKey.entityType.defaultResourceName);
         var pred = buildKeyPredicate(entityKey);
-        q = q.where(pred);
+        q = q.where(pred).toType(entityKey.entityType);
         return q;
     };
 
@@ -9880,6 +9974,11 @@ var EntityQuery = (function () {
         // assertParam(throwErrorIfNotFound, "throwErrorIfNotFound").isBoolean().isOptional().check();
         var entityType = this.entityType;
         if (entityType) return entityType;
+		
+		if (this.asTypeName != undefined) {
+            entityType = metadataStore._getEntityType(this.asTypeName, true);
+            if (entityType) return entityType;
+        }
 
         var resourceName = this.resourceName;
         if (!resourceName) {
@@ -9929,7 +10028,7 @@ var EntityQuery = (function () {
             // resolve it, if possible, via the resourceName
             // do not cache this value in this case
             // cannot determine the resultEntityType if a selectClause is present.
-            return skipFromCheck ? null : (!this.selectClause) && this._getFromEntityType(metadataStore, false);
+            return skipFromCheck ? null : ((!this.selectClause) || this.asTypeName) && this._getFromEntityType(metadataStore, false);
         }
     };
 
@@ -9978,7 +10077,6 @@ var EntityQuery = (function () {
         queryOptions["$expand"] = toExpandString();
         queryOptions["$select"] = toSelectString();
         queryOptions["$inlinecount"] = toInlineCountString();
-        //queryOptions = __extend(queryOptions, this.parameters);
             
         var qoText = toQueryOptionsString(queryOptions);
         return this.resourceName + qoText;
@@ -11432,7 +11530,7 @@ breeze.FnNode = FnNode;
 // Not documented - only exposed for testing purposes
 breeze.OrderByClause = OrderByClause;
 
-;/**
+/**
 @module breeze
 **/
    
@@ -11647,7 +11745,7 @@ breeze.FetchStrategy= FetchStrategy;
 breeze.MergeStrategy = MergeStrategy;
 
 
-;/**
+/**
 @module breeze
 **/
 
@@ -11756,6 +11854,17 @@ var EntityGroup = (function () {
         this._emptyIndexes = null;
     };
 
+    proto._updateFkVal = function (fkProp, oldValue, newValue) {
+        var fkPropName = fkProp.name;
+        this._entities.forEach(function (entity) {
+            if (entity != null) {
+                if (entity.getProperty(fkPropName) == oldValue) {
+                    entity.setProperty(fkPropName, newValue);
+                }
+            }
+        });
+    }
+
     proto._fixupKey = function (tempValue, realValue) {
         // single part keys appear directly in map
         var ix = this._indexMap[tempValue];
@@ -11805,7 +11914,7 @@ var EntityGroup = (function () {
 // do not expose EntityGroup - internal only
 
 
-;/**
+/**
 @module breeze
 **/
 
@@ -12123,14 +12232,6 @@ var EntityManager = (function () {
     }
 
     /**
-    Calls EntityAspect.rejectChanges on every changed entity in this EntityManager. 
-    @method rejectChanges
-    **/
-    proto.rejectChanges = function () {
-        this.getChanges().forEach(function (entity) { entity.entityAspect.rejectChanges(); })
-    }
-
-    /**
     Exports an entire EntityManager or just selected entities into a serialized string for external storage.
     @example
     This method can be used to take a snapshot of an EntityManager that can be either stored offline or held 
@@ -12253,6 +12354,7 @@ var EntityManager = (function () {
         }, function(state) {
             that._pendingPubs.forEach(function(fn) { fn(); });
             that._pendingPubs = null;
+            that._hasChangesAction && that._hasChangesAction();
         }, function () {
             __objectForEach(json.entityGroupMap, function(entityTypeName, jsonGroup) {
                 var entityType = that.metadataStore._getEntityType(entityTypeName, true);
@@ -12291,10 +12393,7 @@ var EntityManager = (function () {
         this._unattachedChildrenMap = new UnattachedChildrenMap();
         this.keyGenerator = new this.keyGeneratorCtor();
         this.entityChanged.publish({ entityAction: EntityAction.Clear });
-        if (this._hasChanges) {
-            this._hasChanges = false;
-            this.hasChangesChanged.publish({ entityManager: this, hasChanges: false });
-        }
+        this._setHasChanges(false);
     };
 
   
@@ -12559,8 +12658,7 @@ var EntityManager = (function () {
         var promise;
         // 'resolve' methods create a new typed object with all of its properties fully resolved against a list of sources.
         // Thought about creating a 'normalized' query with these 'resolved' objects
-        // but decided not to be the 'query' may not be an EntityQuery (it can be a string) and hence might not have a queryOptions or dataServices property on it.
-        // It can be a string.
+        // but decided not to because the 'query' may not be an EntityQuery (it can be a string) and hence might not have a queryOptions or dataServices property on it.
         var queryOptions = QueryOptions.resolve([ query.queryOptions, this.queryOptions, QueryOptions.defaultInstance]);
         var dataService = DataService.resolve([ query.dataService, this.dataService]);
 
@@ -12707,7 +12805,11 @@ var EntityManager = (function () {
         failureFunction([error])
         @param [errorCallback.error] {Error} Any error that occured wrapped into an Error object.
         @param [errorCallback.error.entityErrors] { Array of server side errors }  These are typically validation errors but are generally any error that can be easily isolated to a single entity. 
-        @param [errorCallback.error.httpResponse] {HttpResponse}The raw HttpResponse returned from the server.
+        @param [errorCallback.error.httpResponse] {HttpResponse} The raw HttpResponse returned from the server.
+        @param [errorCallback.error.saveResult] {Object} Some dataservice adapters return a 'saveResult' object 
+        when the failing save operation is non-transactional meaning some entities could be saved while others were not.
+        The 'saveResult' object identifies both that entities that were saved (with their keyMapping)
+        and that entities that were not saved (with their errors).
         
     @return {Promise} Promise
     **/
@@ -12716,15 +12818,15 @@ var EntityManager = (function () {
         assertParam(saveOptions, "saveOptions").isInstanceOf(SaveOptions).isOptional().check();
         assertParam(callback, "callback").isFunction().isOptional().check();
         assertParam(errorCallback, "errorCallback").isFunction().isOptional().check();
-            
+
         saveOptions = saveOptions || this.saveOptions || SaveOptions.defaultInstance;
         var isFullSave = entities == null;
         var entitiesToSave = getEntitiesToSave(this, entities);
             
         if (entitiesToSave.length === 0) {
-            var saveResult =  { entities: [], keyMappings: [] };
-            if (callback) callback(saveResult);
-            return Q.resolve(saveResult);
+            var result =  { entities: [], keyMappings: [] };
+            if (callback) callback(result);
+            return Q.resolve(result);
         }
             
         if (!saveOptions.allowConcurrentSaves) {
@@ -12758,6 +12860,7 @@ var EntityManager = (function () {
         var saveContext = {
             entityManager: this,
             dataService: dataService,
+            processSavedEntities: processSavedEntities,
             resourceName: saveOptions.resourceName || this.saveOptions.resourceName || "SaveChanges"
         };       
 
@@ -12765,8 +12868,7 @@ var EntityManager = (function () {
         // are referenced are also in the partial save group
 
         var saveBundle = { entities: entitiesToSave, saveOptions: saveOptions };
-        
-        var that = this;
+
         
         try { // Guard against exception thrown in dataservice adapter before it goes async
             updateConcurrencyProperties(entitiesToSave);
@@ -12780,28 +12882,43 @@ var EntityManager = (function () {
         }
 
         function saveSuccess(saveResult) {
-            
-            fixupKeys(that, saveResult.keyMappings);
-            
-            var mappingContext = new MappingContext( {
-                query: null, // tells visitAndMerge that this is a save instead of a query
-                entityManager: that,
-                mergeOptions: { mergeStrategy: MergeStrategy.OverwriteChanges },
-                dataService: dataService
-            });
+            var em = saveContext.entityManager;
+            var savedEntities = saveResult.entities = saveContext.processSavedEntities(saveResult);
 
-            // Note that the visitAndMerge operation has been optimized so that we do not actually perform a merge if the 
-            // the save operation did not actually return the entity - i.e. during OData and Mongo updates and deletes.
-            var savedEntities = mappingContext.visitAndMerge(saveResult.entities, { nodeType: "root" });
-            markIsBeingSaved(entitiesToSave, false);
             // update _hasChanges after save.
-            that._hasChanges = (isFullSave && haveSameContents(entitiesToSave, savedEntities)) ? false : that._hasChangesCore();
-            if (!that._hasChanges) {
-                that.hasChangesChanged.publish({ entityManager: that, hasChanges: false });
-            }
-            saveResult.entities = savedEntities;
+            var hasChanges = (isFullSave && haveSameContents(entitiesToSave, savedEntities)) ? false : null;
+            em._setHasChanges(hasChanges);
+
+            markIsBeingSaved(entitiesToSave, false);
             if (callback) callback(saveResult);
             return Q.resolve(saveResult);
+        }
+
+        function processSavedEntities(saveResult) {
+
+            var savedEntities = saveResult.entities;
+            if (savedEntities.length === 0) { return []; }
+            var keyMappings = saveResult.keyMappings;
+            var em = saveContext.entityManager;
+
+            // must occur outside of isLoading block
+            fixupKeys(em, keyMappings);
+
+            __using(em, "isLoading", true, function () {
+                
+                var mappingContext = new MappingContext({
+                    query: null, // tells visitAndMerge this is a save instead of a query
+                    entityManager: em,
+                    mergeOptions: { mergeStrategy: MergeStrategy.OverwriteChanges },
+                    dataService: dataService
+                });
+
+                // The visitAndMerge operation has been optimized so that we do not actually perform a merge if the 
+                // the save operation did not actually return the entity - i.e. during OData and Mongo updates and deletes.
+                savedEntities = mappingContext.visitAndMerge(savedEntities, { nodeType: "root" });
+            });
+            
+            return savedEntities;
         }
 
         function saveFail(error) {
@@ -12811,6 +12928,30 @@ var EntityManager = (function () {
             return Q.reject(error);
         }
     };
+
+    proto.updateFrom = function (saveResult) {
+        saveResult = {
+            entities: saveResult.entities || saveResult.Entities,
+            keyMappings: saveResult.keyMappings || saveResult.KeyMappings || []
+        }
+
+        fixupKeys(this, saveResult.keyMappings);
+
+        var mappingContext = new MappingContext({
+            query: null, // tells visitAndMerge that this is a save instead of a query
+            entityManager: this,
+            mergeOptions: { mergeStrategy: MergeStrategy.OverwriteChanges },
+            dataService: DataService.resolve([this.dataService])
+        });
+
+        // Note that the visitAndMerge operation has been optimized so that we do not actually perform a merge if the 
+        // the save operation did not actually return the entity - i.e. during OData and Mongo updates and deletes.
+        var savedEntities = mappingContext.visitAndMerge(saveResult.entities, { nodeType: "root" });
+        // update _hasChanges after save.
+        this.hasChangesChanged.publish({ entityManager: this, hasChanges: false });
+        saveResult.entities = savedEntities;
+        return Q.resolve(saveResult.entities);
+    }
 
     function clearServerErrors(entities) {
         entities.forEach(function (entity) {
@@ -12902,7 +13043,7 @@ var EntityManager = (function () {
         var employee = em1.getEntityByKey("Employee", 1);
         // employee will either be an entity or null.
     @method getEntityByKey
-    @param typeName {String} The entityType name for this key.
+    @param typeName {EntityType | String} The EntityType or EntityType name for this key.
     @param keyValues {Object|Array of Object} The values for this key - will usually just be a single value; an array is only needed for multipart keys.
     @return {Entity} An Entity or null;
     **/
@@ -12944,16 +13085,14 @@ var EntityManager = (function () {
     will be used to merge any server side entity returned by this method.
     @example
         // assume em1 is an EntityManager containing a number of preexisting entities. 
-        var employeeType = em1.metadataStore.getEntityType("Employee");
-        var employeeKey = new EntityKey(employeeType, 1);
-        em1.fetchEntityByKey(employeeKey).then(function(result) {
+        em1.fetchEntityByKey("Employee", 1).then(function(result) {
             var employee = result.entity;
             var entityKey = result.entityKey;
             var fromCache = result.fromCache;
         });
     @method fetchEntityByKey
     @async
-    @param typeName {String} The entityType name for this key.
+    @param typeName {EntityType | String} The EntityType or EntityType name for this key.
     @param keyValues {Object|Array of Object} The values for this key - will usually just be a single value; an array is only needed for multipart keys.
     @param checkLocalCacheFirst {Boolean=false} Whether to check this EntityManager first before going to the server. By default, the query will NOT do this.
     @return {Promise} 
@@ -12986,18 +13125,32 @@ var EntityManager = (function () {
         promiseData.fromCache {Boolean} Whether this entity was fetched from the server or was found in the local cache.
     **/
     proto.fetchEntityByKey = function () {
-        var tpl = createEntityKey(this, arguments);
+        var dataService = DataService.resolve([this.dataService]);
+        if ((!dataService.hasServerMetadata) || this.metadataStore.hasMetadataFor(dataService.serviceName)) {
+            return fetchEntityByKeyCore(this, arguments);
+        } else {
+            var that = this;
+            var args = arguments;
+            return this.fetchMetadata(dataService).then(function () {
+                return fetchEntityByKeyCore(that, args);
+            });
+        }
+    };
+
+    function fetchEntityByKeyCore(em, args) {
+
+        var tpl = createEntityKey(em, args);
         var entityKey = tpl.entityKey;
         var checkLocalCacheFirst = tpl.remainingArgs.length === 0 ? false : !!tpl.remainingArgs[0];
         var entity;
         var isDeleted = false;
         if (checkLocalCacheFirst) {
-            entity = this.getEntityByKey(entityKey);
+            entity = em.getEntityByKey(entityKey);
             isDeleted = entity && entity.entityAspect.entityState.isDeleted();
             if (isDeleted) {
                 entity = null;
                 // entityManager.queryOptions is always  fully resolved 
-                if (this.queryOptions.mergeStrategy === MergeStrategy.OverwriteChanges) {
+                if (em.queryOptions.mergeStrategy === MergeStrategy.OverwriteChanges) {
                     isDeleted = false;
                 }
             }
@@ -13005,7 +13158,7 @@ var EntityManager = (function () {
         if (entity || isDeleted) {
             return Q.resolve({ entity: entity, entityKey: entityKey, fromCache: true });
         } else {
-            return EntityQuery.fromEntityKey(entityKey).using(this).execute().then(function(data) {
+            return EntityQuery.fromEntityKey(entityKey).using(em).execute().then(function(data) {
                 entity = (data.results.length === 0) ? null : data.results[0];
                 return Q.resolve({ entity: entity, entityKey: entityKey, fromCache: false });
             });
@@ -13164,6 +13317,7 @@ var EntityManager = (function () {
 
     /**
     Rejects (reverses the effects) all of the additions, modifications and deletes from this EntityManager.
+    Calls EntityAspect.rejectChanges on every changed entity in this EntityManager. 
     @example
         // assume em1 is an EntityManager containing a number of preexisting entities.
         var entities = em1.rejectChanges();
@@ -13247,20 +13401,31 @@ var EntityManager = (function () {
 
         if (needsSave) {
             if (!this._hasChanges) {
-                this._hasChanges = true;
-                this.hasChangesChanged.publish({ entityManager: this, hasChanges: true });
+                this._setHasChanges(true);
             }
         } else {
             // called when rejecting a change or merging an unchanged record.
+            // NOTE: this can be slow with lots of entities in the cache.
+            // so defer it during a query/import or save and call it once when complete ( if needed).
             if (this._hasChanges) {
-                // NOTE: this can be slow with lots of entities in the cache.
-                this._hasChanges = this._hasChangesCore();
-                if (!this._hasChanges) {
-                    this.hasChangesChanged.publish({ entityManager: this, hasChanges: false });
+                if (this.isLoading) {
+                    this._hasChangesAction = this._hasChangesAction || function () { this._setHasChanges(null); }.bind(this);
+                } else {
+                    this._setHasChanges(null);
                 }
             }
         }
     };
+
+    proto._setHasChanges = function (hasChanges) {
+        if (hasChanges == null) hasChanges = this._hasChangesCore();
+        var hadChanges = this._hasChanges;
+        this._hasChanges = hasChanges;
+        if (hasChanges != hadChanges) {
+            this.hasChangesChanged.publish({ entityManager: this, hasChanges: hasChanges });
+        }
+        this._hasChangesAction = null;
+    }
 
     proto._linkRelatedEntities = function (entity) {
         var em = this;
@@ -13422,15 +13587,16 @@ var EntityManager = (function () {
     }
         
     function createEntityKey(em, args) {
-        if (args[0] instanceof EntityKey) {
-            return { entityKey: args[0], remainingArgs: __arraySlice(args, 1) };
-        } else if (typeof args[0] === 'string' && args.length >= 2) {
-            var entityType = em.metadataStore._getEntityType(args[0], false);
-            return { entityKey: new EntityKey(entityType, args[1]), remainingArgs: __arraySlice(args, 2) };
-        } else {
-            throw new Error("This method requires as its initial parameters either an EntityKey or an entityType name followed by a value or an array of values.");
-        }
-    }       
+        try {
+            if (args[0] instanceof EntityKey) {
+                return { entityKey: args[0], remainingArgs: __arraySlice(args, 1) };
+            } else if (args.length >= 2) {
+                var entityType = (typeof args[0] === 'string') ? em.metadataStore._getEntityType(args[0], false) : args[0];
+                return { entityKey: new EntityKey(entityType, args[1]), remainingArgs: __arraySlice(args, 2) };
+            }
+        } catch (e) {/* throw below */}
+        throw new Error("Must supply an EntityKey OR an EntityType name or EntityType followed by a key value or an array of key values.");
+    }      
         
     function markIsBeingSaved(entities, flag) {
         entities.forEach(function(entity) {
@@ -13721,6 +13887,12 @@ var EntityManager = (function () {
         return attachedEntity;
     }
 
+    proto._updateFkVal = function (fkProp, oldValue, newValue) {
+        var group = this._entityGroupMap[fkProp.parentType.name];
+        if (!group) return;
+        group._updateFkVal(fkProp, oldValue, newValue)
+    }
+
     function attachRelatedEntities(em, entity, entityState, mergeStrategy) {
         var navProps = entity.entityType.navigationProperties;
         navProps.forEach(function (np) {
@@ -13760,7 +13932,8 @@ var EntityManager = (function () {
                     dataService: dataService,
                     mergeOptions: {
                         mergeStrategy: queryOptions.mergeStrategy,
-                        noTracking: !!query.noTrackingEnabled
+                        noTracking: !!query.noTrackingEnabled,
+						asTypeName: query.asTypeName
                     }
             });
             
@@ -13775,8 +13948,9 @@ var EntityManager = (function () {
                 }, function (state) {
                     // cleanup
                     em.isLoading = state.isLoading;
-                    em._pendingPubs.forEach(function(fn) { fn(); });
+                    em._pendingPubs.forEach(function (fn) { fn(); });
                     em._pendingPubs = null;
+                    em._hasChangesAction && em._hasChangesAction();
                     // HACK for GC
                     query = null;
                     mappingContext = null;
@@ -14043,7 +14217,7 @@ var EntityManager = (function () {
 // expose
 breeze.EntityManager = EntityManager;
 
-;/**
+/**
 @module breeze
 **/
 
@@ -14121,7 +14295,7 @@ var MappingContext = (function () {
             return refValue;
         } else if (meta.entityType) {
             var entityType = meta.entityType;
-            if (mc.mergeOptions.noTracking) {
+            if (!mc.mergeOptions.asTypeName && mc.mergeOptions.noTracking) {
                 node = processNoMerge(mc, entityType, node);
                 if (entityType.noTrackingFn) {
                     node = entityType.noTrackingFn(node, entityType);
@@ -14265,7 +14439,7 @@ var MappingContext = (function () {
                     em.entityChanged.publish({ entityAction: action, entity: targetEntity });
                     // this is needed to handle an overwrite of a modified entity with an unchanged entity 
                     // which might in turn cause _hasChanges to change.
-                    if (!targetEntityState.isUnchanged) {
+                    if (!targetEntityState.isUnchanged()) {
                         em._notifyStateChange(targetEntity, false);
                     }
                 } else {
@@ -14421,7 +14595,7 @@ var MappingContext = (function () {
    
 
 
-;/**
+/**
 @module breeze
 **/
    
@@ -14525,7 +14699,7 @@ var SaveOptions = (function () {
 breeze.SaveOptions= SaveOptions;
 
 
-;breeze.AbstractDataServiceAdapter = (function () {
+breeze.AbstractDataServiceAdapter = (function () {
     
     var ajaxImpl;
     
@@ -14542,15 +14716,9 @@ breeze.SaveOptions= SaveOptions;
     ctor.prototype.initialize = function () {
         ajaxImpl = breeze.config.getAdapterInstance("ajax");
 
-        if (!ajaxImpl) {
-            throw new Error("Unable to initialize ajax for WebApi.");
-        }
-
-        // don't cache 'ajax' because we then we would need to ".bind" it, and don't want to because of brower support issues. 
-        var ajax = ajaxImpl.ajax;
-        if (!ajax) {
-            throw new Error("Breeze was unable to find an 'ajax' adapter");
-        }
+        // don't cache 'ajax' because then we would need to ".bind" it, and don't want to because of brower support issues. 
+        if (ajaxImpl && ajaxImpl.ajax) { return; }
+        throw new Error("Unable to find ajax adapter for dataservice adapter '"+(this.name||'')+"'.");
     };
 
     ctor.prototype.fetchMetadata = function (metadataStore, dataService) {
@@ -14601,9 +14769,9 @@ breeze.SaveOptions= SaveOptions;
 
         var that = this;
         var params = {
-            type: "GET",
+            type: mappingContext.query.method,
             url: url,
-            params: mappingContext.query.parameters,
+            params: mappingContext.query.method != "GET" ? JSON.stringify(mappingContext.query.parameters) : mappingContext.query.parameters,
             dataType: 'json',
             success: function (httpResponse) {
                 var data = httpResponse.data;
@@ -14629,6 +14797,9 @@ breeze.SaveOptions= SaveOptions;
                 handleHttpError(deferred, httpResponse);
             }
         };
+		if (mappingContext.query.method != "GET") {
+			params.contentType = "application/json; charset=utf-8";
+		}
         if (mappingContext.dataService.useJsonp) {
             params.dataType = 'jsonp';
             params.crossDomain = true;
@@ -14753,7 +14924,7 @@ breeze.SaveOptions= SaveOptions;
     return ctor;
 
 })();
-;// needs Angular
+// needs Angular
 (function(factory) {
     // Module systems magic dance.
     if (breeze) {
@@ -14803,7 +14974,8 @@ breeze.SaveOptions= SaveOptions;
             url: config.url,
             dataType: config.dataType,
             contentType: config.contentType,
-            crossDomain: config.crossDomain
+            crossDomain: config.crossDomain,
+            headers: config.headers || {}
         }
 
         if (config.params) {
@@ -14821,6 +14993,8 @@ breeze.SaveOptions= SaveOptions;
         if (!core.isEmpty(this.defaultSettings)) {
             var compositeConfig = core.extend({}, this.defaultSettings);
             ngConfig = core.extend(compositeConfig, ngConfig);
+            // extend is shallow; extend headers separately
+            ngConfig.headers = core.extend(this.defaultSettings.headers, ngConfig.headers);
         }
 
         httpService(ngConfig).success(function (data, status, headers, xconfig) {
@@ -14880,7 +15054,7 @@ breeze.SaveOptions= SaveOptions;
     breeze.config.registerAdapter("ajax", ctor);
     
 }));
-;// needs JQuery
+// needs JQuery
 (function(factory) {
     // Module systems magic dance.
     if (breeze) {
@@ -14918,22 +15092,44 @@ breeze.SaveOptions= SaveOptions;
             data: config.params || config.data,
             dataType: config.dataType,
             contentType: config.contentType,
-            crossDomain: config.crossDomain
+            crossDomain: config.crossDomain,
+            headers: config.headers || {}
         }
         
         if (!core.isEmpty(this.defaultSettings)) {
             var compositeConfig = core.extend({}, this.defaultSettings);
             jqConfig = core.extend(compositeConfig, jqConfig);
+            // extend is shallow; extend headers separately
+            jqConfig.headers = core.extend(this.defaultSettings.headers, jqConfig.headers);
         }
         
         jqConfig.success = function (data, textStatus, XHR) {
-            var httpResponse = {
-                data: data,
-                status: XHR.status,
-                getHeaders: getHeadersFn(XHR),
-                config: config
-            };
-            config.success(httpResponse);
+            var httpResponse;
+            var xRespondedJson = XHR.getResponseHeader("X-Responded-JSON");
+            if (xRespondedJson != undefined) {
+                var xRespondedObj = JSON.parse(xRespondedJson);
+                httpResponse = {
+                    data: data,
+                    status: xRespondedObj.status != undefined ? xRespondedObj.status : XHR.status,
+                    getHeaders: getMergedHeadersFn(XHR, xRespondedObj.headers),
+                    error: data.Message,
+                    config: config
+                };
+            } else {
+                httpResponse = {
+                    data: data,
+                    status: XHR.status,
+                    getHeaders: getHeadersFn(XHR),
+                    config: config
+                };
+            }
+            
+            if (httpResponse.status >= 300) {
+                config.error(httpResponse);
+            } else {
+                config.success(httpResponse);
+            }
+        
             XHR.onreadystatechange = null;
             XHR.abort = null;
         };
@@ -14964,11 +15160,29 @@ breeze.SaveOptions= SaveOptions;
         };
     }
     
+	//Returns headers from XHR object as well as headers from additional container
+	//We need it cause MVC 5 now returns 'X-Responded-JSON' header containing JSON object with additional 'headers' property
+    function getMergedHeadersFn(XHR, additionalHeaders) {
+        if (additionalHeaders == undefined) return getHeadersFn(XHR);
+
+        return function (headerName) {
+            if (headerName && headerName.length > 0) {
+                var header = XHR.getResponseHeader(headerName);
+                return header != undefined ? header : additionalHeaders[headerName];
+            } else {
+                var headers = XHR.getAllResponseHeaders();
+                for (var propname in additionalHeaders) {
+                    headers = headers.replace(/^\s+|\s+$/g, '') + '\n' + propname + ': ' + additionalHeaders[propname];
+                }
+                return headers;
+            };
+        };
+    }
 
     breeze.config.registerAdapter("ajax", ctor);
     
 }));
-;(function (factory) {
+(function (factory) {
     if (breeze) {
         factory(breeze);
     } else if (typeof require === "function" && typeof exports === "object" && typeof module === "object") {
@@ -14990,16 +15204,17 @@ breeze.SaveOptions= SaveOptions;
     
     var ctor = function () {
         this.name = "OData";
-
     };
 
-    ctor.prototype.initialize = function () {
+    var fn = ctor.prototype; // minifies better (as seen in jQuery)
+
+    fn.initialize = function () {
         OData = core.requireLib("OData", "Needed to support remote OData services");
         OData.jsonHandler.recognizeDates = true;
     };
     
     
-    ctor.prototype.executeQuery = function (mappingContext) {
+    fn.executeQuery = function (mappingContext) {
     
         var deferred = Q.defer();
         var url = mappingContext.getUrl();
@@ -15024,7 +15239,7 @@ breeze.SaveOptions= SaveOptions;
     };
     
 
-    ctor.prototype.fetchMetadata = function (metadataStore, dataService) {
+    fn.fetchMetadata = function (metadataStore, dataService) {
 
         var deferred = Q.defer();
 
@@ -15072,14 +15287,16 @@ breeze.SaveOptions= SaveOptions;
 
     };
 
-    ctor.prototype.saveChanges = function (saveContext, saveBundle) {
+    fn.getRoutePrefix = function(dataService){ return ''; /* see webApiODataCtor */}
+
+    fn.saveChanges = function (saveContext, saveBundle) {
 
         var deferred = Q.defer();
 
         var helper = saveContext.entityManager.helper;
         var url = saveContext.dataService.makeUrl("$batch");
-        
-        var requestData = createChangeRequests(saveContext, saveBundle);
+        var routePrefix = this.getRoutePrefix(saveContext.dataService);
+        var requestData = createChangeRequests(saveContext, saveBundle, routePrefix);
         var tempKeys = saveContext.tempKeys;
         var contentKeys = saveContext.contentKeys;
         var that = this;
@@ -15130,7 +15347,7 @@ breeze.SaveOptions= SaveOptions;
 
     };
  
-    ctor.prototype.jsonResultsAdapter = new JsonResultsAdapter({
+    fn.jsonResultsAdapter = new JsonResultsAdapter({
         name: "OData_default",
 
         visitNode: function (node, mappingContext, nodeContext) {
@@ -15172,11 +15389,11 @@ breeze.SaveOptions= SaveOptions;
         return val;
     }
 
-    function createChangeRequests(saveContext, saveBundle) {
+    function createChangeRequests(saveContext, saveBundle, routePrefix) {
         var changeRequests = [];
         var tempKeys = [];
         var contentKeys = [];
-        var prefix = saveContext.dataService.serviceName;
+        var baseUri = saveContext.dataService.serviceName;
         var entityManager = saveContext.entityManager;
         var helper = entityManager.helper;
         var id = 0;
@@ -15186,17 +15403,17 @@ breeze.SaveOptions= SaveOptions;
             var request = { headers: { "Content-ID": id, "DataServiceVersion": "2.0" } };
             contentKeys[id] = entity;
             if (aspect.entityState.isAdded()) {
-                request.requestUri = entity.entityType.defaultResourceName;
+                request.requestUri = routePrefix + entity.entityType.defaultResourceName;
                 request.method = "POST";
                 request.data = helper.unwrapInstance(entity, transformValue);
                 tempKeys[id] = aspect.getKey();
             } else if (aspect.entityState.isModified()) {
-                updateDeleteMergeRequest(request, aspect, prefix);
+                updateDeleteMergeRequest(request, aspect, baseUri, routePrefix);
                 request.method = "MERGE";
                 request.data = helper.unwrapChangedValues(entity, entityManager.metadataStore, transformValue);
                 // should be a PATCH/MERGE
             } else if (aspect.entityState.isDeleted()) {
-                updateDeleteMergeRequest(request, aspect, prefix);
+                updateDeleteMergeRequest(request, aspect, baseUri, routePrefix);
                 request.method = "DELETE";
             } else {
                 return;
@@ -15213,11 +15430,11 @@ breeze.SaveOptions= SaveOptions;
 
     }
 
-    function updateDeleteMergeRequest(request, aspect, prefix) {
+    function updateDeleteMergeRequest(request, aspect, baseUri, routePrefix) {
         var extraMetadata = aspect.extraMetadata;
         var uri = extraMetadata.uri || extraMetadata.id;
-        if (core.stringStartsWith(uri, prefix)) {
-            uri = uri.substring(prefix.length);
+        if (core.stringStartsWith(uri, baseUri)) {
+            uri = routePrefix + uri.substring(baseUri.length);
         }
         request.requestUri = uri;
         if (extraMetadata.etag) {
@@ -15269,9 +15486,29 @@ breeze.SaveOptions= SaveOptions;
 
     breeze.config.registerAdapter("dataService", ctor);
 
-}));
 
-;(function(factory) {
+    var webApiODataCtor = function () {
+        this.name = "webApiOData";
+    }
+
+    breeze.core.extend(webApiODataCtor.prototype, fn);
+
+    webApiODataCtor.prototype.getRoutePrefix = function(dataService){
+        // Get the routePrefix from a Web API OData service name.
+        // Web API OData requires inclusion of the routePrefix in the Uri of a batch subrequest
+        // By convention, Breeze developers add the Web API OData routePrefix to the end of the serviceName
+        // e.g. the routePrefix in 'http://localhost:55802/odata/' is 'odata/'
+        var segments = dataService.serviceName.split('/');
+        var last = segments.length-1 ;
+        var routePrefix = segments[last] || segments[last-1];
+        routePrefix = routePrefix ? routePrefix += '/' : '';
+        return routePrefix;
+    };
+
+    breeze.config.registerAdapter("dataService", webApiODataCtor);
+
+}));
+(function(factory) {
     if (breeze) {
         factory(breeze);
     } else if (typeof require === "function" && typeof exports === "object" && typeof module === "object") {
@@ -15362,7 +15599,8 @@ breeze.SaveOptions= SaveOptions;
     
     breeze.config.registerAdapter("dataService", ctor);
 
-}));;"use strict";
+}));
+"use strict";
 (function (factory) {
     if (breeze) {
         factory(breeze);
@@ -15567,7 +15805,7 @@ breeze.SaveOptions= SaveOptions;
     // private methods
 
 }));
-;"use strict";
+"use strict";
 (function (factory) {
     if (breeze) {
         factory(breeze);
@@ -15850,7 +16088,7 @@ breeze.SaveOptions= SaveOptions;
     breeze.config.registerAdapter("modelLibrary", ctor);
 
 }));
-;"use strict";
+"use strict";
 (function (factory) {
     if (breeze) {
         factory(breeze);
@@ -16114,7 +16352,7 @@ breeze.SaveOptions= SaveOptions;
     breeze.config.registerAdapter("modelLibrary", ctor);
     
 }));
-;
+
 // set defaults
 // will no longer fail at initialization time if jQuery is not found.
 breeze.config.initializeAdapterInstances( { dataService: "webApi", ajax: "jQuery" });

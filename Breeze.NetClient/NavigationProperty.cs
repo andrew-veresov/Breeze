@@ -26,29 +26,31 @@ namespace Breeze.NetClient {
       this._invForeignKeyNamesOnServer = np._invForeignKeyNamesOnServer;
     }
 
-    JNode IJsonSerializable.ToJNode() {
+    public NavigationProperty(JNode jNode) {
+      Name = jNode.Get<String>("name");
+      EntityTypeName = jNode.Get<String>("entityTypeName");
+      IsScalar = jNode.Get<bool>("isScalar", true);
+      AssociationName = jNode.Get<String>("associationName");
+      _validators = new ValidatorCollection(jNode.GetJNodeArray("validators"));
+      _foreignKeyNames.AddRange(jNode.GetArray<String>("foreignKeyNames"));
+      _invForeignKeyNames.AddRange(jNode.GetArray<String>("invForeignKeyNames"));
+      // custom
+    }
+
+    JNode IJsonSerializable.ToJNode(Object config) {
       var jo = new JNode();
-      jo.Add("name", this.Name);
-      jo.Add("entityTypeName", this.EntityTypeName);
-      jo.Add("isScalar", this.IsScalar);
-      jo.Add("associationName", this.AssociationName);
-      // jo.AddArray("validators", this.Validators);
+      jo.AddPrimitive("name", this.Name);
+      jo.AddPrimitive("entityTypeName", this.EntityTypeName);
+      jo.AddPrimitive("isScalar", this.IsScalar);
+      jo.AddPrimitive("associationName", this.AssociationName);
+      jo.AddArray("validators", this.Validators);
       jo.AddArray("foreignKeyNames", this.ForeignKeyNames);
       jo.AddArray("invForeignKeyNames", this.InvForeignKeyNames);
       // jo.Add("custom", this.Custom.ToJObject)
       return jo;
     }
 
-    void IJsonSerializable. FromJNode(JNode jNode) {
-      Name = jNode.Get<String>("name");
-      EntityTypeName = jNode.Get<String>("entityTypeName");
-      IsScalar = jNode.Get<bool>("isScalar", true);
-      AssociationName = jNode.Get<String>("associationName");
-      // _validators.AddRange()
-      _foreignKeyNames.AddRange(jNode.GetSimpleArray<String>("foreignKeyNames"));
-      _invForeignKeyNames.AddRange(jNode.GetSimpleArray<String>("invForeignKeyNames"));
-      // custom
-    }
+  
 
     public EntityType EntityType { get; internal set; }
     public override Type ClrType {
