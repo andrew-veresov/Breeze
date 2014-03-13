@@ -627,6 +627,20 @@ var EntityAspect = (function() {
                 ok = validate(that, validator, value, context) && ok;
             });
         });
+
+        var stype = context.entity.entityType;
+        var entity = context.entity;
+        var entityAspect = context.entity.entityAspect;
+
+        // then entity level
+        this._processValidationOpAndPublish(function(that) {
+            stype.validators.forEach(function (validator) {
+                if (validator.context.displayName == context.propertyName) {
+                    ok = validate(entityAspect, validator, entity) && ok;
+                }
+            });
+        })
+
         return ok;
     };
 
